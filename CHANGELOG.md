@@ -50,7 +50,7 @@ Consolidates the 3.0.10 to 3.0.14 dev cycle (commenter handles, `--competitors`,
 ### Fixed
 
 - **Claude Code plugin manifest path-escape.** The `.claude-plugin/plugin.json` `skills` key was removed in commit `93fbed2` but never shipped in a tagged release. Installing via `/plugin install last30days-skill` could hit `/doctor`'s `Path escapes plugin directory: ./ (skills)` error. This release ships the fix. Closes [#306](https://github.com/mvanhorn/last30days-skill/issues/306).
-- **Broken README link.** The README's "source of truth" link pointed at `skills/last30days/SKILL.md`, a path that does not exist. Fixed to point at root `SKILL.md`.
+- **Broken README link.** The README's "source of truth" link pointed at root `SKILL.md`, which is no longer maintained after the plugin-layout restructure. Fixed to point at `skills/last30days/SKILL.md`.
 
 ### Dev cycle journal (3.0.10 - 3.0.14, not separately tagged)
 
