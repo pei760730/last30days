@@ -1,0 +1,49 @@
+{
+  "name": "last30days",
+  "version": "3.8.1",
+  "description": "Research any topic across Reddit, X, YouTube, TikTok, Instagram, Hacker News, Polymarket, GitHub, and the web.",
+  "author": {
+    "name": "Matt Van Horn",
+    "email": "mvanhorn@gmail.com",
+    "url": "https://github.com/mvanhorn"
+  },
+  "homepage": "https://github.com/mvanhorn/last30days-skill",
+  "repository": "https://github.com/mvanhorn/last30days-skill",
+  "license": "MIT",
+  "keywords": [
+    "research",
+    "reddit",
+    "twitter",
+    "youtube",
+    "tiktok",
+    "instagram",
+    "trends",
+    "prompts",
+    "polymarket",
+    "github",
+    "perplexity",
+    "threads",
+    "pinterest",
+    "eli5",
+    "hacker-news"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "last30days",
+    "shortDescription": "Research what people are saying about a topic now.",
+    "longDescription": "last30days adds a Codex skill for researching recent discussion and engagement signals across social, video, developer, prediction-market, and web sources.",
+    "developerName": "Matt Van Horn",
+    "category": "Research",
+    "capabilities": [
+      "Research",
+      "Web"
+    ],
+    "websiteURL": "https://github.com/mvanhorn/last30days-skill",
+    "defaultPrompt": [
+      "/last30days OpenAI Codex",
+      "/last30days AI video tools",
+      "/last30days react user complaints"
+    ],
+    "brandColor": "#6F42C1"
+  }
+}
