@@ -55,6 +55,7 @@ def normalize_source_items(
         "github": _normalize_github,
         "perplexity": _normalize_grounding,
         "jobs": _normalize_jobs,
+        "linkedin": _normalize_linkedin,
     }
     normalizer = normalizers.get(source)
     if normalizer is None:
@@ -599,4 +600,33 @@ def _normalize_grounding(
         why_relevant=str(item.get("why_relevant") or ""),
         snippet=snippet,
         metadata=item.get("metadata") or {},
+    )
+
+
+def _normalize_linkedin(
+    source: str,
+    item: dict[str, Any],
+    index: int,
+    from_date: str,
+    to_date: str,
+) -> schema.SourceItem:
+    """Normalizer for LinkedIn posts via ScrapeCreators."""
+    text = str(item.get("text") or "").strip()
+    author = str(item.get("author") or "").strip()
+    url = str(item.get("url") or "").strip()
+    return _source_item(
+        item_id=str(item.get("id") or f"LI{index + 1}"),
+        source=source,
+        title=text[:140] or f"LinkedIn post {index + 1}",
+        body=text,
+        url=url,
+        author=author,
+        container="LinkedIn",
+        published_at=item.get("date"),
+        date_confidence=_date_confidence(item, from_date, to_date, default="medium"),
+        engagement=item.get("engagement") or {},
+        relevance_hint=item.get("relevance", 0.5),
+        why_relevant=str(item.get("why_relevant") or ""),
+        snippet=text[:200],
+        metadata={"author_display": author},
     )

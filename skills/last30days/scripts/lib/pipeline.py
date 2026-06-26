@@ -25,6 +25,7 @@ from . import (
     hiring_signals,
     instagram,
     jobs,
+    linkedin,
     normalize,
     permission_preflight,
     perplexity,
@@ -67,7 +68,7 @@ SEARCH_ALIAS = {
     "xquik": "x",  # xquik is a backend of the single "x" source, not its own source
 }
 
-MAX_SOURCE_FETCHES: dict[str, int] = {"x": 2, "jobs": 1}
+MAX_SOURCE_FETCHES: dict[str, int] = {"x": 2, "jobs": 1, "linkedin": 1}
 
 # Per-handle result caps for the X handle-search lanes. The FROM lane (the
 # subject's own timeline) is the single best source for a person topic, so it
@@ -99,6 +100,7 @@ MOCK_AVAILABLE_SOURCES = [
     "pinterest",
     "digg",
     "jobs",
+    "linkedin",
 ]
 
 
@@ -118,7 +120,7 @@ def available_sources(config: dict[str, Any], requested_sources: list[str] | Non
     # reddit_public needs no API key - always available
     available.append("reddit")
     if config.get("SCRAPECREATORS_API_KEY"):
-        available.extend(["tiktok", "instagram"])
+        available.extend(["tiktok", "instagram", "linkedin"])
     if env.get_x_source(config):
         available.append("x")
     if which("yt-dlp") or env.is_youtube_sc_available(config):
@@ -1399,6 +1401,15 @@ def _retrieve_stream(
             ig_creators=ig_creators,
         )
         return instagram.parse_instagram_response(result), {}
+    if source == "linkedin":
+        result = linkedin.search_linkedin(
+            subquery.search_query,
+            from_date,
+            to_date,
+            depth=depth,
+            token=config.get("SCRAPECREATORS_API_KEY", ""),
+        )
+        return linkedin.parse_linkedin_response(result), {}
     if source == "hackernews":
         result = hackernews.search_hackernews(subquery.search_query, from_date, to_date, depth=depth)
         return hackernews.parse_hackernews_response(result, query=subquery.search_query), {}
