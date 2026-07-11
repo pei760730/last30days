@@ -34,6 +34,10 @@ jobs:
 
       - name: Generate briefs
         id: gen
+        env:
+          # headless 沒 host 模型,靠這把免費 Gemini key 當推理大腦(規劃+排序+合成)。
+          # 空值 = 自動 fallback 到內建 deterministic,不會壞。
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
         run: |
           set -uo pipefail
           CLI="skills/last30days/scripts/last30days.py"
