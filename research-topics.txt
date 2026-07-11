@@ -1,0 +1,7 @@
+# last30days 每日研究主題清單
+# ── 一行一個主題;# 開頭 = 註解;空行忽略。
+# ── daily-brief workflow 每天取「前 3 個非註解主題」各跑一份 brief,合併推到 Telegram。
+# ── 這份由 AI 幫你維護,你在對話裡說「加/換主題」我就改,你不用開檔。
+men's fashion trends
+Palantir PLTR
+MP Materials rare earth

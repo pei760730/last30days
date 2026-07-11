@@ -1,0 +1,91 @@
+name: daily-brief
+
+# 每天把 research-topics.txt 前 3 個主題各跑一份 last30days brief,
+# 合併後透過 kai-notify 推到 Kai 的 Telegram(@MYNOOTIFYBot)。
+# 需要 repo secrets:KAI_NOTIFY_BOT_TOKEN、KAI_NOTIFY_CHAT_ID。
+
+on:
+  schedule:
+    - cron: "0 23 * * *"   # 23:00 UTC = 07:00 Asia/Taipei(隔天早上)
+  workflow_dispatch:
+    inputs:
+      topic:
+        description: "一次性主題(留空 = 讀 research-topics.txt 前 3 個)"
+        required: false
+        default: ""
+
+concurrency:
+  group: daily-brief
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  brief:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Generate briefs
+        id: gen
+        run: |
+          set -uo pipefail
+          CLI="skills/last30days/scripts/last30days.py"
+
+          # 決定主題清單
+          if [ -n "${{ github.event.inputs.topic }}" ]; then
+            printf '%s\n' "${{ github.event.inputs.topic }}" > .topics
+          else
+            grep -vE '^[[:space:]]*#|^[[:space:]]*$' research-topics.txt | head -3 > .topics
+          fi
+
+          : > digest.md
+          while IFS= read -r t; do
+            [ -z "$t" ] && continue
+            echo "→ researching: $t" >&2
+            python "$CLI" "$t" --emit brief 2>/dev/null > brief.txt || true
+            {
+              # 標題 + 日期 + 來源那段
+              sed -n '/^# Production Brief/,/^## Ranked Storylines/p' brief.txt
+              # 該主題前 3 條 storyline
+              awk '/^### /{n++} n>=1 && n<=3' brief.txt
+              echo ""
+            } >> digest.md
+          done < .topics
+
+          # 沒抓到任何內容時給個保底訊息
+          if [ ! -s digest.md ]; then
+            echo "⚠️ last30days daily-brief 這次沒產出內容(來源可能全部無回應)。" > digest.md
+          fi
+
+          # Telegram 上限 4096 字元,保守截到 3500
+          head -c 3500 digest.md > digest.trunc && mv digest.trunc digest.md
+
+          {
+            echo "text<<__KN_EOF__"
+            cat digest.md
+            echo "__KN_EOF__"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Push brief to Telegram (kai-notify, fail-soft)
+        uses: pei760730/kai-notify@v1
+        env:
+          KAI_NOTIFY_BOT_TOKEN: ${{ secrets.KAI_NOTIFY_BOT_TOKEN }}
+          KAI_NOTIFY_CHAT_ID: ${{ secrets.KAI_NOTIFY_CHAT_ID }}
+        with:
+          text: ${{ steps.gen.outputs.text }}
+
+      - name: Report failure to Kai (fail-soft)
+        if: failure()
+        uses: pei760730/kai-notify@v1
+        env:
+          KAI_NOTIFY_BOT_TOKEN: ${{ secrets.KAI_NOTIFY_BOT_TOKEN }}
+          KAI_NOTIFY_CHAT_ID: ${{ secrets.KAI_NOTIFY_CHAT_ID }}
+        with:
+          text: "🔴 last30days daily-brief FAILED — ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
