@@ -38,13 +38,15 @@ jobs:
           # headless 沒 host 模型,靠這把免費 Gemini key 當推理大腦(規劃+排序+合成)。
           # 空值 = 自動 fallback 到內建 deterministic,不會壞。
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          # workflow_dispatch 輸入走 env,不在 run: 內文直接 ${{ }} 內插(避免 template injection)
+          TOPIC: ${{ github.event.inputs.topic }}
         run: |
           set -uo pipefail
           CLI="skills/last30days/scripts/last30days.py"
 
           # 決定主題清單
-          if [ -n "${{ github.event.inputs.topic }}" ]; then
-            printf '%s\n' "${{ github.event.inputs.topic }}" > .topics
+          if [ -n "$TOPIC" ]; then
+            printf '%s\n' "$TOPIC" > .topics
           else
             grep -vE '^[[:space:]]*#|^[[:space:]]*$' research-topics.txt | head -3 > .topics
           fi
