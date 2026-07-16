@@ -66,12 +66,15 @@ jobs:
           done < .topics
 
           # 沒抓到任何內容時給個保底訊息
-          if [ ! -s digest.md ]; then
+          # 判「去空白後是否為空」:迴圈每題固定 echo "" 進 digest.md,
+          # 純 -s(size>0)永遠為真,保底會變死碼、空內容直推 Telegram 反觸發假 FAILED
+          if [ -z "$(tr -d '[:space:]' < digest.md)" ]; then
             echo "⚠️ last30days daily-brief 這次沒產出內容(來源可能全部無回應)。" > digest.md
           fi
 
           # Telegram 上限 4096 字元,保守截到 3500
-          head -c 3500 digest.md > digest.trunc && mv digest.trunc digest.md
+          # 按「字元」截斷,不用 head -c(位元組截斷會切壞 UTF-8 中文/emoji → Telegram 400)
+          python -c "import sys; t=open('digest.md',encoding='utf-8').read(); open('digest.md','w',encoding='utf-8').write(t[:3500])"
 
           {
             echo "text<<__KN_EOF__"
