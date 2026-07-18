@@ -74,12 +74,17 @@ jobs:
 
           # Telegram 上限 4096 字元,保守截到 3500
           # 按「字元」截斷,不用 head -c(位元組截斷會切壞 UTF-8 中文/emoji → Telegram 400)
-          python -c "import sys; t=open('digest.md',encoding='utf-8').read(); open('digest.md','w',encoding='utf-8').write(t[:3500])"
+          # 截斷後必補結尾換行 + 去 \r:檔尾沒 \n 時 heredoc 關閉分隔符會黏在內容同一行,
+          # GITHUB_OUTPUT 配對失敗 "Matching delimiter not found"(7/15、7/17 兩次間歇紅根因——
+          # 只在內容超長被截斷的日子觸發)
+          python -c "import sys; t=open('digest.md',encoding='utf-8').read().replace('\r',''); t=t[:3500]; open('digest.md','w',encoding='utf-8').write(t if t.endswith('\n') else t+'\n')"
 
           {
-            echo "text<<__KN_EOF__"
+            # 分隔符隨機化:內容來自外部抓取,固定字串理論上可能被內容撞掉
+            DELIM="KN_EOF_${RANDOM}${RANDOM}"
+            echo "text<<${DELIM}"
             cat digest.md
-            echo "__KN_EOF__"
+            echo "${DELIM}"
           } >> "$GITHUB_OUTPUT"
 
       - name: Push brief to Telegram (kai-notify, fail-soft)
