@@ -24,6 +24,9 @@ jobs:
   scan-scheduled:
     uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@9a498708959aeaef5ef730655706c5a1df1edbc2 # v2.3.8
     permissions:
+      # actions: read is required by the reusable workflow's own permission
+      # block (SARIF upload to CodeQL); granting less causes startup_failure.
+      actions: read
       contents: read
       security-events: write
     with:
