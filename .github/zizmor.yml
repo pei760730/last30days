@@ -1,0 +1,21 @@
+# zizmor configuration — https://docs.zizmor.sh/configuration/
+#
+# Why this file exists: zizmor's default `unpinned-uses` blanket policy demands
+# a commit hash for every action. That is the right default for third-party and
+# GitHub-owned actions, and every workflow here follows it.
+#
+# It is the wrong rule for our OWN actions. `pei760730/kai-notify@v1` is
+# deliberately consumed through a moving major tag so a fix to the notifier
+# reaches every repo in the fleet at once; hash-pinning it would mean chasing a
+# SHA bump through each consumer before anyone gets the fix. The supply-chain
+# risk that hash-pinning defends against — an upstream owner rewriting a tag —
+# is not present when we own both ends.
+#
+# Stating that as policy beats waiving the finding per-PR: the exemption is now
+# reviewable, and anything OUTSIDE it still fails.
+rules:
+  unpinned-uses:
+    config:
+      policies:
+        "*": hash-pin
+        "pei760730/*": ref-pin
