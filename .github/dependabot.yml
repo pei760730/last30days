@@ -1,16 +1,10 @@
-# Keep GitHub Actions current automatically.
-#
-# Why this file exists: on 2026-07-26 a fleet-wide scan found 25 of 26 repos had
-# no dependabot at all, and every one of them was a full MAJOR version behind on
-# actions/checkout, setup-python and friends. A moving tag like `@v5` only moves
-# inside its own major line — once v6 ships, `@v5` is frozen and nothing says so.
-#
 # Schedule: dependabot has no "biweekly" interval, and cron has no week-parity
 # field either, so "every two weeks" is expressed as the 1st and 15th. Fixed
 # dates on purpose — a true 14-day cycle drifts across weekdays over time.
 #
-# grouped on purpose: the default (one PR per action) turns into a drizzle of
-# PRs to triage. One bundled PR per run is reviewable in a single pass.
+# All three ecosystems keep their own entry: an earlier version of this change
+# replaced the whole file with only the github-actions block, which would have
+# silently retired uv and gomod updates. Only the SCHEDULE changed here.
 version: 2
 updates:
   - package-ecosystem: github-actions
@@ -25,3 +19,21 @@ updates:
       github-actions:
         patterns:
           - "*"
+
+  - package-ecosystem: uv
+    directory: /
+    schedule:
+      interval: cron
+      cronjob: "0 9 1,15 * *"
+      timezone: Asia/Taipei
+    cooldown:
+      default-days: 7
+
+  - package-ecosystem: gomod
+    directory: /mcp
+    schedule:
+      interval: cron
+      cronjob: "0 9 1,15 * *"
+      timezone: Asia/Taipei
+    cooldown:
+      default-days: 7
