@@ -5,6 +5,12 @@ on:
     tags:
       - "v*"
 
+# 同群組排隊而**不**取消:這支會寫外部資料(Sheet / git push),
+# 砍在寫一半比多等一輪糟得多 —— 部分更新的狀態沒人看得出來。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 permissions: {}
 
 
