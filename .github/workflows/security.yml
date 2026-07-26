@@ -7,6 +7,12 @@ on:
       - main
   workflow_dispatch:
 
+# 同一分支的新 push 取代舊跑:唯讀檢查,砍掉正在跑的那次零損失,
+# 省下重複的 Actions 分鐘(私有 repo 額度元兇是 AI 高頻 push)。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions: {}
 
 jobs:
