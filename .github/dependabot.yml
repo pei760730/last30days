@@ -1,22 +1,39 @@
+# Schedule: dependabot has no "biweekly" interval, and cron has no week-parity
+# field either, so "every two weeks" is expressed as the 1st and 15th. Fixed
+# dates on purpose — a true 14-day cycle drifts across weekdays over time.
+#
+# All three ecosystems keep their own entry: an earlier version of this change
+# replaced the whole file with only the github-actions block, which would have
+# silently retired uv and gomod updates. Only the SCHEDULE changed here.
 version: 2
 updates:
   - package-ecosystem: github-actions
     directory: /
     schedule:
-      interval: weekly
+      interval: cron
+      cronjob: "0 9 1,15 * *"
+      timezone: Asia/Taipei
     cooldown:
       default-days: 7
+    groups:
+      github-actions:
+        patterns:
+          - "*"
 
   - package-ecosystem: uv
     directory: /
     schedule:
-      interval: weekly
+      interval: cron
+      cronjob: "0 9 1,15 * *"
+      timezone: Asia/Taipei
     cooldown:
       default-days: 7
 
   - package-ecosystem: gomod
     directory: /mcp
     schedule:
-      interval: weekly
+      interval: cron
+      cronjob: "0 9 1,15 * *"
+      timezone: Asia/Taipei
     cooldown:
       default-days: 7
