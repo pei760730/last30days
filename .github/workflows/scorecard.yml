@@ -27,6 +27,8 @@ jobs:
   analysis:
     name: Scorecard analysis
     runs-on: ubuntu-latest
+    # 實測最長 1.2 分(近 26 次);不設就是吃 360 分鐘預設(同上,不加中止通知)
+    timeout-minutes: 15
     # Job-level permissions fully replace the top-level block (unlisted scopes
     # default to none), so the reads checkout and Scorecard need are explicit.
     permissions:

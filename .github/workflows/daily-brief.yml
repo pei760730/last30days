@@ -119,3 +119,26 @@ jobs:
           KAI_NOTIFY_CHAT_ID: ${{ secrets.KAI_NOTIFY_CHAT_ID }}
         with:
           text: "🔴 last30days daily-brief FAILED — ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+  # ── 被中止(cancelled)的唯一出口 ─────────────────────────────────────────
+  # job 逾時到點 / 人為按停 / concurrency 取代 → conclusion 是 `cancelled` 而非
+  # `failure`,GitHub 會直接跳過剩下的步驟。所以上面所有 `if: failure()` 的通知
+  # 對這個狀態完全免疫:這輪沒做完,而 owner 收不到任何訊息。step 層條件看不到
+  # 這個狀態,只有 job 層的 needs.<job>.result 看得到,所以必須是獨立 job。
+  # 已實際發生過:th-customs-scan 的 scan.yml 歷史裡就有一次 cancelled 收場。
+  notify-cancelled:
+    needs: brief
+    if: ${{ always() && needs.brief.result == 'cancelled' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Error annotation (API-blip resilient)
+        run: echo "::error::last30days 早報 was CANCELLED (timeout or manual stop) - the run did not complete. Re-run needed."
+
+      - name: Report to Kai (kai-notify, fail-soft)
+        uses: pei760730/kai-notify@v1
+        env:
+          KAI_NOTIFY_BOT_TOKEN: ${{ secrets.KAI_NOTIFY_BOT_TOKEN }}
+          KAI_NOTIFY_CHAT_ID: ${{ secrets.KAI_NOTIFY_CHAT_ID }}
+        with:
+          text: "🟠 last30days 早報 被中止(逾時或人為按停)——今天沒有早報,需要重跑 — ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
