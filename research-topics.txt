@@ -1,7 +1,11 @@
 # last30days 每日研究主題清單
 # ── 一行一個主題;# 開頭 = 註解;空行忽略。
 # ── daily-brief workflow 每天取「前 3 個非註解主題」各跑一份 brief,合併推到 Telegram。
+# ── 主題後面可以接該題專屬的 CLI flags(一個空格 + `--` 開頭),只影響那一題:
+#      men's fashion trends --search reddit,tiktok,instagram
+#    最常用的是 --search(逗號分隔的來源白名單),用來擋掉會污染該題的來源。
+#    白名單裡沒設定 key 的來源會自動 no-op,不會壞。
 # ── 這份由 AI 幫你維護,你在對話裡說「加/換主題」我就改,你不用開檔。
-men's fashion trends
+men's fashion trends --search reddit,tiktok,instagram,grounding
 Palantir PLTR
 MP Materials rare earth
