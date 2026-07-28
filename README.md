@@ -1,5 +1,25 @@
 # /last30days
 
+> ## 🏠 這是 Kai 的 fork(`pei760730/last30days`)
+>
+> 上游是 [mvanhorn/last30days-skill](https://github.com/mvanhorn/last30days-skill),**這一段以下的整份 README 是上游原文、不動**(跟 [AGENTS.md](AGENTS.md) 同一個約定:fork 專屬內容只寫在自己的區塊裡)。
+>
+> **這個 repo 每天只做一件事**:早上 **07:00(台北)** 自動跑 [`research-topics.txt`](research-topics.txt) 的前 3 個主題,各出一份 brief,取每題前 3 條 storyline 合併,透過 [kai-notify](https://github.com/pei760730/kai-notify) 推到 Telegram。實作在 [`.github/workflows/daily-brief.yml`](.github/workflows/daily-brief.yml)。
+>
+> | 事項 | 說明 |
+> |---|---|
+> | **唯一旋鈕** | [`research-topics.txt`](research-topics.txt) — 一行一題,`#` 開頭 = 註解 |
+> | **只跑前 3 條** | 第 4 條起永遠不會跑(`head -3`);清單超過 3 條時 brief 尾巴會明示警告,不沉默 |
+> | **怎麼改主題** | 在對話裡跟 Claude 說「加/換主題」就好,你不用開檔 |
+> | **推理大腦** | headless 沒 host 模型,靠免費 Gemini key(`GOOGLE_API_KEY`);沒 key 自動 fallback 到內建 deterministic,不會壞 |
+> | **手動跑一次** | Actions → daily-brief → Run workflow(`topic` 留空 = 讀清單前 3 條) |
+> | **通知涵蓋** | 成功推 brief、失敗推 🔴、被中止(cancelled)推 🟠 — 三種出口都不靜默 |
+> | **需要的 secrets** | `KAI_NOTIFY_BOT_TOKEN`、`KAI_NOTIFY_CHAT_ID`、`GOOGLE_API_KEY`(選配) |
+>
+> **🚫 紅線:別下 `--deep`** — 會叫付費模型,本帳號實測 429。日常一律 `--emit brief`(cron 已固定)。細節與 env 層封印見 [CLAUDE.md](CLAUDE.md)。
+>
+> ---
+
 <p align="center">
   <img src="media/pr-assets/last30days-ad.gif" width="720" alt="last30days - an AI agent-led search engine that searches people, not editors" />
 </p>
