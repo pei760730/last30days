@@ -40,6 +40,32 @@ jobs:
         with:
           python-version: "3.12"
 
+      # Techmeme / arXiv / Digg 三支來源是免費、免 key 的,但 upstream 只在
+      # 「首次互動式 setup」裡裝 —— headless cron 從來沒跑過那段,所以這條線
+      # 每天都只有 3/5 來源在工作。Digg 特別值錢:它是 X 的 AI 1000 榜單聚合,
+      # 不需要 X 登入,是這裡唯一拿得到 X 訊號的免費路。
+      #
+      # 版本釘死 0.1.16 = 引擎自己 pin 的同一版(setup_wizard.py PRINTING_PRESS_NPM),
+      # 不用 latest,免得上游改版無聲改變每天的產出。
+      # 這幾支 CLI 是 Go 編的,ubuntu-latest runner 內建 Go。
+      #
+      # fail-soft:裝不起來就照舊跑少幾個來源,絕不能讓早報整輪掛掉。
+      # PATH 先寫再裝,這樣就算安裝逾時被砍,已經裝好的那幾支仍然找得到。
+      - name: Install free source CLIs (Techmeme / arXiv / Digg, fail-soft)
+        continue-on-error: true
+        timeout-minutes: 8
+        run: |
+          set -uo pipefail
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          for slug in techmeme arxiv digg; do
+            if npx -y @mvanhorn/printing-press-library@0.1.16 install "$slug" --cli-only; then
+              echo "✓ $slug"
+            else
+              echo "::warning::${slug}-pp-cli 安裝失敗,本輪少這個來源(不影響其他來源)"
+            fi
+          done
+          ls -1 "$HOME/.local/bin" 2>/dev/null || echo "(沒有任何 CLI 裝成功)"
+
       - name: Generate briefs
         id: gen
         env:
