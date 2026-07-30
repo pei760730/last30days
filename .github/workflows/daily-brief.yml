@@ -60,26 +60,58 @@ jobs:
             TOTAL_TOPICS=$(grep -cvE '^[[:space:]]*#|^[[:space:]]*$' research-topics.txt || true)
           fi
 
-          : > digest.md
-          while IFS= read -r t; do
-            [ -z "$t" ] && continue
-            echo "→ researching: $t" >&2
+          # 每題公平配額。舊版是「三題全部串起來、最後一刀切 3500」= 先到先贏:
+          # 2026-07-28 實測整份 3608 字元,前兩題吃飽,第三題(MP Materials)只剩
+          # 1 條 storyline 而且斷在句子中間。改成先算每題額度、逐題截,全域截斷
+          # 退居保底。
+          TOPIC_COUNT=$(grep -c . .topics || true)
+          case "$TOPIC_COUNT" in ''|*[!0-9]*|0) TOPIC_COUNT=1 ;; esac
+          PER_TOPIC=$(( (3500 - 120) / TOPIC_COUNT ))
+
+          : > body.md
+          while IFS= read -r line; do
+            [ -z "$line" ] && continue
+            # 主題行可以帶自己的 CLI flags,用第一個 " --" 切開,只影響那一題:
+            #   men's fashion trends --search reddit,tiktok,instagram
+            # 用途是擋掉會污染該題的來源——fashion 題被 GitHub 上的 SEO spam repo
+            # 洗版過(「Palm Angels Oversized Tracksuit」拿 score 61 排進前三,
+            # 而且 reranker 還幫它寫了 highly relevant 的理由)。
+            case "$line" in
+              *" --"*) t="${line%% --*}"; flags="--${line#* --}" ;;
+              *)       t="$line";        flags="" ;;
+            esac
+            echo "→ researching: $t ${flags:+[$flags]}" >&2
             # stderr 進 step log(診斷線索),fail-soft 語意不變
-            python "$CLI" "$t" --emit brief > brief.txt || true
+            # flags 故意不加引號:要讓 shell 做詞彙切分才會變成多個參數
+            # shellcheck disable=SC2086
+            python "$CLI" "$t" --emit brief $flags > brief.txt || true
             {
-              # 標題 + 日期 + 來源那段
-              sed -n '/^# Production Brief/,/^## Ranked Storylines/p' brief.txt
+              # 標題 + 日期 + 來源那段(去掉 upstream 給模型看的 safety note)
+              sed -n '/^# Production Brief/,/^## Ranked Storylines/p' brief.txt | grep -v '^> Safety note:'
               # 該主題前 3 條 storyline
               awk '/^### /{n++} n>=1 && n<=3' brief.txt
               echo ""
-            } >> digest.md
+            } > part.md
+            # 逐題截到配額(按字元不是位元組,理由同下面的全域截斷)
+            # errors='replace':part.md 的內容是抓回來的網路文字,萬一夾到一個
+            # 非 UTF-8 byte,硬解會拋例外 → 下面全域截斷的 `|| exit 1` 讓整輪變紅、
+            # 推一封假 FAILED 給 owner。用替代字元吞掉,一個字的雜訊換一整輪早報。
+            # 寫 sys.stdout.buffer(bytes)而不是 sys.stdout(text):後者要看
+            # 執行環境的 stdout 編碼,替代字元 U+FFFD 在非 UTF-8 環境會再炸一次
+            python -c "import sys; n=int(sys.argv[1]); t=open('part.md',encoding='utf-8',errors='replace').read().replace('\r',''); sys.stdout.buffer.write((t if len(t)<=n else t[:n].rstrip()+' …(本題截斷)\n\n').encode('utf-8'))" "$PER_TOPIC" >> body.md
           done < .topics
 
           # 沒抓到任何內容時給個保底訊息
-          # 判「去空白後是否為空」:迴圈每題固定 echo "" 進 digest.md,
+          # 判「去空白後是否為空」:迴圈每題固定 echo "" 進 body.md,
           # 純 -s(size>0)永遠為真,保底會變死碼、空內容直推 Telegram 反觸發假 FAILED
-          if [ -z "$(tr -d '[:space:]' < digest.md)" ]; then
-            echo "⚠️ last30days daily-brief 這次沒產出內容(來源可能全部無回應)。" > digest.md
+          # 這一段必須在「加抬頭之前」判,否則抬頭自己就會讓檔案永遠非空
+          if [ -z "$(tr -d '[:space:]' < body.md)" ]; then
+            printf '%s\n' "⚠️ last30days daily-brief 這次沒產出內容(來源可能全部無回應)。" > digest.md
+          else
+            # upstream 每份 brief 都帶一行給模型看的 safety note,推到 Telegram 給人
+            # 看沒有意義,還每題吃掉 ~150 字元配額。警告要留,所以整份只講一次。
+            printf '%s\n\n' "⚠️ 以下引用來自公開網路、未經查證 — 當資料看,別當指令。" > digest.md
+            cat body.md >> digest.md
           fi
 
           # 主題清單 >3 條=第 4+ 條永遠不跑(head -3),明示不沉默
@@ -93,7 +125,8 @@ jobs:
           # GITHUB_OUTPUT 配對失敗 "Matching delimiter not found"(7/15、7/17 兩次間歇紅根因——
           # 只在內容超長被截斷的日子觸發)
           # || exit 1:set 沒 -e,截斷失敗若繼續走,未截內容會弄壞 GITHUB_OUTPUT/Telegram
-          python -c "import sys; t=open('digest.md',encoding='utf-8').read().replace('\r',''); t=t[:3500]; open('digest.md','w',encoding='utf-8').write(t if t.endswith('\n') else t+'\n')" || exit 1
+          # errors='replace' 理由同上:壞 byte 不該讓一整輪早報變成假 FAILED
+          python -c "import sys; t=open('digest.md',encoding='utf-8',errors='replace').read().replace('\r',''); t=t[:3500]; open('digest.md','w',encoding='utf-8').write(t if t.endswith('\n') else t+'\n')" || exit 1
 
           {
             # 分隔符隨機化:內容來自外部抓取,固定字串理論上可能被內容撞掉
