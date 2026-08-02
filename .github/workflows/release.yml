@@ -20,6 +20,7 @@ jobs:
   # so the .mcpb matrix can run in parallel.
   build-skill:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
       id-token: write
@@ -52,6 +53,7 @@ jobs:
   # zip layout; we only supply the pre-built binary via --skip-build.
   build-mcpb:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
       id-token: write
@@ -143,6 +145,7 @@ jobs:
   release:
     needs: [build-skill, build-mcpb]
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       actions: read
       contents: write

@@ -19,6 +19,7 @@ jobs:
   dependency-audit:
     name: Dependency audit
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
     steps:
@@ -38,6 +39,7 @@ jobs:
     name: Dependency review
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
     steps:
@@ -52,6 +54,7 @@ jobs:
   secret-scan:
     name: Secret scan
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
     steps:
@@ -73,6 +76,7 @@ jobs:
   sast-scan:
     name: SAST scan
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
     container:
