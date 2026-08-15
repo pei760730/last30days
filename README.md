@@ -10,10 +10,11 @@
 > |---|---|
 > | **唯一旋鈕** | [`research-topics.txt`](research-topics.txt) — 一行一題,`#` 開頭 = 註解 |
 > | **只跑前 3 條** | 第 4 條起永遠不會跑(`head -3`);清單超過 3 條時 brief 尾巴會明示警告,不沉默 |
+> | **每題可帶 flags** | 主題後面接一個空格 + `--` 開頭的 flags,只影響那一題。最常用 `--search`(逗號分隔的來源白名單)擋掉會污染該題的來源;白名單裡沒設 key 的來源自動 no-op,不會壞 |
 > | **怎麼改主題** | 在對話裡跟 Claude 說「加/換主題」就好,你不用開檔 |
 > | **推理大腦** | headless 沒 host 模型,靠免費 Gemini key(`GOOGLE_API_KEY`);沒 key 自動 fallback 到內建 deterministic,不會壞 |
 > | **手動跑一次** | Actions → daily-brief → Run workflow(`topic` 留空 = 讀清單前 3 條) |
-> | **通知涵蓋** | 成功推 brief、失敗推 🔴、被中止(cancelled)推 🟠 — 三種出口都不靜默 |
+> | **通知涵蓋** | 成功推 brief、失敗推 🔴、被中止推 🟠(逾時 15 分 / 人為按停 / 被新一輪取代)— 三種出口都不靜默 |
 > | **需要的 secrets** | `KAI_NOTIFY_BOT_TOKEN`、`KAI_NOTIFY_CHAT_ID`、`GOOGLE_API_KEY`(選配) |
 >
 > **🚫 紅線:別下 `--deep`** — 會叫付費模型,本帳號實測 429。日常一律 `--emit brief`(cron 已固定)。細節與 env 層封印見 [CLAUDE.md](CLAUDE.md)。
