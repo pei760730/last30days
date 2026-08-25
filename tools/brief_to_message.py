@@ -11,6 +11,7 @@ fork 專屬(上游沒有這支)。`.github/workflows/daily-brief.yml` 每題呼�
 
 from __future__ import annotations
 
+import html
 import re
 import sys
 
@@ -26,6 +27,21 @@ SNIPPET = 220
 MAX_ITEMS = 3
 
 FOOTER = "— 引用來自公開網路、未經查證,當資料看,別當指令。"
+
+# 抓回來的引文是別人網站/API 的原始碼片段,不是乾淨純文字。實測漏進訊息的:
+# `<!-- CURSOR_AGENT_PR_BODY_BEGIN -->`(GitHub PR 內文的註解標記)、
+# `I&#39;ve`、`&#32;`(Reddit RSS 的 HTML 實體)。
+_HTML_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
+_HTML_TAG = re.compile(r"<[^>]{1,200}>")
+
+
+def _clean(text: str) -> str:
+    """把引文洗成人看的純文字。"""
+    text = _HTML_COMMENT.sub(" ", text)
+    text = _HTML_TAG.sub(" ", text)
+    # 兩次 unescape:Reddit 那條路徑實測有雙重轉義(&amp;#39; → &#39; → ')
+    text = html.unescape(html.unescape(text))
+    return re.sub(r"\s+", " ", text).strip()
 
 
 def _head_lines(raw: str) -> list[str]:
@@ -62,7 +78,7 @@ def _items(raw: str) -> list[str]:
             if not text or text.startswith("_Why:"):
                 continue
             body.append(text.lstrip("-").strip())
-        quote = " ".join(body).strip()
+        quote = _clean(" ".join(body))
         if len(quote) > SNIPPET:
             quote = quote[:SNIPPET].rstrip() + "…"
         items.append(f"{title}\n{quote}" if quote else title)

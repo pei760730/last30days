@@ -123,3 +123,35 @@ def test_survives_invalid_utf8_via_replacement_char():
     raw = "# Production Brief: T\n\n## Ranked Storylines\n\n### 1. Head (score 1, Reddit)\n- caf� broken\n"
     msg = btm.build_message(raw, "T")
     assert "Head" in msg
+
+
+def test_decodes_html_entities():
+    """Reddit RSS 那條路徑會送 &#39; / &#32; 進來,不能原樣推給人看。"""
+    raw = (
+        "# Production Brief: T\n\n## Ranked Storylines\n\n"
+        "### 1. Head (score 1, Reddit)\n- I&#39;ve seen it&#32;again &amp; again\n"
+    )
+    msg = btm.build_message(raw, "T")
+    assert "I've seen it again & again" in msg
+    assert "&#39;" not in msg and "&#32;" not in msg
+
+
+def test_strips_html_comments_and_tags():
+    """GitHub PR 內文帶 <!-- ... --> 標記,實測漏進過訊息。"""
+    raw = (
+        "# Production Brief: T\n\n## Ranked Storylines\n\n"
+        "### 1. Head (score 1, GitHub)\n"
+        "- <!-- CURSOR_AGENT_PR_BODY_BEGIN --> Real <b>content</b> here\n"
+    )
+    msg = btm.build_message(raw, "T")
+    assert "CURSOR_AGENT_PR_BODY_BEGIN" not in msg
+    assert "<b>" not in msg
+    assert "Real content here" in msg
+
+
+def test_cleaning_happens_before_snippet_cap():
+    """先洗再截,否則被砍掉的額度都花在標記上。"""
+    noise = "<!-- " + "n" * 400 + " -->"
+    raw = f"# Production Brief: T\n\n## Ranked Storylines\n\n### 1. Head (score 1, GitHub)\n- {noise} visible tail\n"
+    msg = btm.build_message(raw, "T")
+    assert "visible tail" in msg
