@@ -1,10 +1,12 @@
 # /last30days
 
+English | [Français](README.fr.md) | [Deutsch](README.de.md) | [Español](README.es.md) | [Português (Brasil)](README.pt-BR.md) | [日本語](README.ja.md) | [简体中文](README.zh-CN.md)
+
 > ## 🏠 這是 Kai 的 fork(`pei760730/last30days`)
 >
 > 上游是 [mvanhorn/last30days-skill](https://github.com/mvanhorn/last30days-skill),**這一段以下的整份 README 是上游原文、不動**(跟 [AGENTS.md](AGENTS.md) 同一個約定:fork 專屬內容只寫在自己的區塊裡)。
 >
-> **這個 repo 每天只做一件事**:早上 **07:00(台北)** 自動跑 [`research-topics.txt`](research-topics.txt) 的前 3 個主題,各出一份 brief,取每題前 3 條 storyline 合併,透過 [kai-notify](https://github.com/pei760730/kai-notify) 推到 Telegram。實作在 [`.github/workflows/daily-brief.yml`](.github/workflows/daily-brief.yml)。
+> **這個 repo 每天只做一件事**:早上 **07:00(台北)** 自動跑 [`research-topics.txt`](research-topics.txt) 的前 3 個主題,各出一份 brief,取每題前 3 條 storyline 合併,透過 kai-notify 推到 Telegram。實作在 [`.github/workflows/daily-brief.yml`](.github/workflows/daily-brief.yml)。
 >
 > | 事項 | 說明 |
 > |---|---|
@@ -33,7 +35,6 @@
 >
 > ---
 
-English | [Français](README.fr.md) | [Deutsch](README.de.md) | [Español](README.es.md) | [Português (Brasil)](README.pt-BR.md) | [日本語](README.ja.md) | [简体中文](README.zh-CN.md)
 
 <p align="center">
   <img src="media/pr-assets/last30days-ad.gif" width="720" alt="last30days - an AI agent-led search engine that searches people, not editors" />
