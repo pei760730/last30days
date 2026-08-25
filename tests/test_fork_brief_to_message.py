@@ -155,3 +155,50 @@ def test_cleaning_happens_before_snippet_cap():
     raw = f"# Production Brief: T\n\n## Ranked Storylines\n\n### 1. Head (score 1, GitHub)\n- {noise} visible tail\n"
     msg = btm.build_message(raw, "T")
     assert "visible tail" in msg
+
+
+def test_pure_reddit_boilerplate_leaves_title_only():
+    """引文只有 RSS 樣板時整條丟掉,標題本身才是資訊。"""
+    raw = (
+        "# Production Brief: T\n\n## Ranked Storylines\n\n"
+        "### 1. Burry opened a PLTR short (score 57, Reddit)\n"
+        "- &#32; submitted by &#32; /u/Spade_of_Trades &#32; to &#32; r/WallstreetWhales [link] &#32; [comments]\n"
+    )
+    msg = btm.build_message(raw, "T")
+    assert "Burry opened a PLTR short" in msg
+    assert "submitted by" not in msg
+    assert "[comments]" not in msg
+
+
+def test_reddit_boilerplate_tail_is_stripped_but_body_kept():
+    """有真內文時只剝尾巴,不要把內容一起丟掉。"""
+    raw = (
+        "# Production Brief: T\n\n## Ranked Storylines\n\n"
+        "### 1. Head (score 1, Reddit)\n"
+        "- Real discussion about rare earth pricing. submitted by /u/someone to r/stocks [link] [comments]\n"
+    )
+    msg = btm.build_message(raw, "T")
+    assert "Real discussion about rare earth pricing." in msg
+    assert "submitted by" not in msg
+
+
+def test_quote_that_echoes_title_is_dropped():
+    """HN 那類條目的 snippet 就是標題本身,同一句不印兩次。"""
+    head = "Palantir soars 12% on blowout quarter"
+    raw = (
+        "# Production Brief: T\n\n## Ranked Storylines\n\n"
+        f"### 1. {head} (score 69, Hacker News)\n- {head}\n"
+    )
+    msg = btm.build_message(raw, "T")
+    assert msg.count(head) == 1
+
+
+def test_quote_that_merely_starts_like_title_is_kept():
+    """開頭像標題不等於重複 —— 後面有新資訊就要留。"""
+    raw = (
+        "# Production Brief: T\n\n## Ranked Storylines\n\n"
+        "### 1. Palantir soars 12% (score 69, Hacker News)\n"
+        "- Palantir soars 12% and the CFO said the backlog doubled year over year.\n"
+    )
+    msg = btm.build_message(raw, "T")
+    assert "backlog doubled" in msg
