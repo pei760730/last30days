@@ -387,7 +387,19 @@ def run(
         available = [s for s in available if s != "grounding"]
     elif web_backend in ("brave", "exa", "serper", "parallel", "keyless") and "grounding" not in available:
         available.append("grounding")
-    if (hiring_signals_mode or _company_topic_likely(topic)) and "jobs" not in available:
+    # An explicit source allow-list (--search / LAST30DAYS_DEFAULT_SEARCH) has to
+    # win over the "this topic looks like a company, add jobs" heuristic. This
+    # append used to be unconditional, so a company-shaped topic pulled the jobs
+    # source in no matter what the caller asked for: "Palantir PLTR" with
+    # --search reddit,hackernews,polymarket still returned 300+ job postings,
+    # which all share one boilerplate company blurb and crowd real signal out of
+    # the top ranks. hiring_signals_mode stays exempt: that flag *is* the caller
+    # asking for jobs. The mock branch above already had this semantics
+    # (it only drops jobs when no sources were requested); this aligns the live
+    # branch with it.
+    if (
+        hiring_signals_mode or (not requested_sources and _company_topic_likely(topic))
+    ) and "jobs" not in available:
         available.append("jobs")
     if hiring_signals_mode:
         config = dict(config)

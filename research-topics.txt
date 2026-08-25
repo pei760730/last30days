@@ -7,5 +7,5 @@
 #    白名單裡沒設定 key 的來源會自動 no-op,不會壞。
 # ── 這份由 AI 幫你維護,你在對話裡說「加/換主題」我就改,你不用開檔。
 men's fashion trends --search reddit,tiktok,instagram,grounding
-Palantir PLTR
+Palantir PLTR --search reddit,hackernews,polymarket,grounding
 MP Materials rare earth
