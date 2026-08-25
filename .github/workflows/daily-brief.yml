@@ -1,8 +1,14 @@
 name: daily-brief
 
 # 每天把 research-topics.txt 前 3 個主題各跑一份 last30days brief,
-# 合併後透過 kai-notify 推到 Kai 的 Telegram(@MYNOOTIFYBot)。
+# 每題各推一封到 Kai 的 Telegram(@MYNOOTIFYBot)。
 # 需要 repo secrets:KAI_NOTIFY_BOT_TOKEN、KAI_NOTIFY_CHAT_ID。
+#
+# 為什麼是「每題一封」而不是「三題併一封」:
+# kai-notify 一次只發一封,Telegram 單封上限 4096 字元。三題擠一封時每題只
+# 分得 ~1126 字元,2026-08-25 實測三題全部卡在配額上、第 3 條 storyline 每天
+# 被砍掉。拆成 matrix 之後每題獨享一封(保守用 3800),同時換到三個好處:
+# 一題失敗不再連坐其他題、三題平行跑、手機上一封就是一個主題好掃。
 
 on:
   schedule:
@@ -22,9 +28,13 @@ permissions:
   contents: read
 
 jobs:
-  brief:
+  # ── 決定今天跑哪幾題,輸出 JSON 給下面的 matrix 展開 ──────────────────
+  plan:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 5
+    outputs:
+      topics: ${{ steps.pick.outputs.topics }}
+      total: ${{ steps.pick.outputs.total }}
     steps:
       # Hash-pinned like every other workflow in this repo. This one was the
       # lone holdout on moving tags, which kept a zizmor `unpinned-uses` error
@@ -36,103 +46,109 @@ jobs:
           # expose it to every later step (zizmor artipacked).
           persist-credentials: false
 
+      - name: Pick topics
+        id: pick
+        env:
+          # workflow_dispatch 輸入走 env,不在 run: 內文直接 ${{ }} 內插(避免 template injection)
+          TOPIC: ${{ github.event.inputs.topic }}
+        run: |
+          set -uo pipefail
+          if [ -n "$TOPIC" ]; then
+            printf '%s\n' "$TOPIC" > .topics
+            TOTAL_TOPICS=1
+          else
+            grep -vE '^[[:space:]]*#|^[[:space:]]*$' research-topics.txt | head -3 > .topics
+            TOTAL_TOPICS=$(grep -cvE '^[[:space:]]*#|^[[:space:]]*$' research-topics.txt || true)
+          fi
+          case "$TOTAL_TOPICS" in ''|*[!0-9]*) TOTAL_TOPICS=0 ;; esac
+
+          # 主題字串含空白、撇號(men's)、逗號,交給 python 產合法 JSON,
+          # 不要自己用 shell 拼字串
+          python3 -c "import json; print('topics=' + json.dumps([l for l in open('.topics',encoding='utf-8').read().splitlines() if l.strip()]))" >> "$GITHUB_OUTPUT"
+          echo "total=${TOTAL_TOPICS}" >> "$GITHUB_OUTPUT"
+          cat .topics
+
+      # 主題清單 >3 條 = 第 4 條起永遠不跑(head -3),明示不沉默。
+      # 舊版是附在合併訊息尾巴,現在訊息拆開了,這則就自己走一封。
+      - name: Warn on overflow (fail-soft)
+        if: ${{ fromJSON(steps.pick.outputs.total) > 3 }}
+        uses: pei760730/kai-notify@v1
+        env:
+          KAI_NOTIFY_BOT_TOKEN: ${{ secrets.KAI_NOTIFY_BOT_TOKEN }}
+          KAI_NOTIFY_CHAT_ID: ${{ secrets.KAI_NOTIFY_CHAT_ID }}
+        with:
+          text: "⚠️ last30days 主題清單共 ${{ steps.pick.outputs.total }} 條,每日只跑前 3 條;第 4 條起不會跑(對話裡刪舊題或加 # 註解)"
+
+      # 清單全空(整份被註解掉)時 matrix 展不開、brief 直接被跳過,這裡補一封。
+      # 否則就是「什麼都沒收到」——跟系統掛掉長得一模一樣。
+      - name: Warn on empty topic list (fail-soft)
+        if: ${{ steps.pick.outputs.topics == '[]' }}
+        uses: pei760730/kai-notify@v1
+        env:
+          KAI_NOTIFY_BOT_TOKEN: ${{ secrets.KAI_NOTIFY_BOT_TOKEN }}
+          KAI_NOTIFY_CHAT_ID: ${{ secrets.KAI_NOTIFY_CHAT_ID }}
+        with:
+          text: "⚠️ last30days 主題清單是空的,今天沒有早報(research-topics.txt 沒有任何未註解的主題)"
+
+  # ── 一題一個 job,一題一封訊息 ────────────────────────────────────────
+  brief:
+    needs: plan
+    if: ${{ needs.plan.outputs.topics != '[]' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      # 一題失敗不該連坐其他題 —— 舊版單 job 是三題一起成功或一起沒有
+      fail-fast: false
+      matrix:
+        topic: ${{ fromJSON(needs.plan.outputs.topics) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
 
-      - name: Generate briefs
+      - name: Generate brief
         id: gen
         env:
           # headless 沒 host 模型,靠這把免費 Gemini key 當推理大腦(規劃+排序+合成)。
           # 空值 = 自動 fallback 到內建 deterministic,不會壞。
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
-          # workflow_dispatch 輸入走 env,不在 run: 內文直接 ${{ }} 內插(避免 template injection)
-          TOPIC: ${{ github.event.inputs.topic }}
+          # matrix 值同樣走 env,不在 run: 內文直接 ${{ }} 內插
+          TOPIC_LINE: ${{ matrix.topic }}
         run: |
           set -uo pipefail
           CLI="skills/last30days/scripts/last30days.py"
 
-          # 決定主題清單
-          if [ -n "$TOPIC" ]; then
-            printf '%s\n' "$TOPIC" > .topics
-          else
-            grep -vE '^[[:space:]]*#|^[[:space:]]*$' research-topics.txt | head -3 > .topics
-            TOTAL_TOPICS=$(grep -cvE '^[[:space:]]*#|^[[:space:]]*$' research-topics.txt || true)
-          fi
+          # 主題行可以帶該題專屬的 CLI flags,用第一個 " --" 切開:
+          #   men's fashion trends --search reddit,tiktok,instagram
+          # 用途是擋掉會污染該題的來源——fashion 題被 GitHub 上的 SEO spam repo
+          # 洗版過(「Palm Angels Oversized Tracksuit」拿 score 61 排進前三,
+          # 而且 reranker 還幫它寫了 highly relevant 的理由)。
+          case "$TOPIC_LINE" in
+            *" --"*) t="${TOPIC_LINE%% --*}"; flags="--${TOPIC_LINE#* --}" ;;
+            *)       t="$TOPIC_LINE";        flags="" ;;
+          esac
+          echo "→ researching: $t ${flags:+[$flags]}" >&2
 
-          # 每題公平配額。舊版是「三題全部串起來、最後一刀切 3500」= 先到先贏:
-          # 2026-07-28 實測整份 3608 字元,前兩題吃飽,第三題(MP Materials)只剩
-          # 1 條 storyline 而且斷在句子中間。改成先算每題額度、逐題截,全域截斷
-          # 退居保底。
-          TOPIC_COUNT=$(grep -c . .topics || true)
-          case "$TOPIC_COUNT" in ''|*[!0-9]*|0) TOPIC_COUNT=1 ;; esac
-          PER_TOPIC=$(( (3500 - 120) / TOPIC_COUNT ))
+          # stderr 進 step log(診斷線索),fail-soft 語意不變
+          # flags 故意不加引號:要讓 shell 做詞彙切分才會變成多個參數
+          # shellcheck disable=SC2086
+          python "$CLI" "$t" --emit brief $flags > brief.txt || true
 
-          : > body.md
-          while IFS= read -r line; do
-            [ -z "$line" ] && continue
-            # 主題行可以帶自己的 CLI flags,用第一個 " --" 切開,只影響那一題:
-            #   men's fashion trends --search reddit,tiktok,instagram
-            # 用途是擋掉會污染該題的來源——fashion 題被 GitHub 上的 SEO spam repo
-            # 洗版過(「Palm Angels Oversized Tracksuit」拿 score 61 排進前三,
-            # 而且 reranker 還幫它寫了 highly relevant 的理由)。
-            case "$line" in
-              *" --"*) t="${line%% --*}"; flags="--${line#* --}" ;;
-              *)       t="$line";        flags="" ;;
-            esac
-            echo "→ researching: $t ${flags:+[$flags]}" >&2
-            # stderr 進 step log(診斷線索),fail-soft 語意不變
-            # flags 故意不加引號:要讓 shell 做詞彙切分才會變成多個參數
-            # shellcheck disable=SC2086
-            python "$CLI" "$t" --emit brief $flags > brief.txt || true
-            {
-              # 標題 + 日期 + 來源那段(去掉 upstream 給模型看的 safety note)
-              sed -n '/^# Production Brief/,/^## Ranked Storylines/p' brief.txt | grep -v '^> Safety note:'
-              # 該主題前 3 條 storyline
-              awk '/^### /{n++} n>=1 && n<=3' brief.txt
-              echo ""
-            } > part.md
-            # 逐題截到配額(按字元不是位元組,理由同下面的全域截斷)
-            # errors='replace':part.md 的內容是抓回來的網路文字,萬一夾到一個
-            # 非 UTF-8 byte,硬解會拋例外 → 下面全域截斷的 `|| exit 1` 讓整輪變紅、
-            # 推一封假 FAILED 給 owner。用替代字元吞掉,一個字的雜訊換一整輪早報。
-            # 寫 sys.stdout.buffer(bytes)而不是 sys.stdout(text):後者要看
-            # 執行環境的 stdout 編碼,替代字元 U+FFFD 在非 UTF-8 環境會再炸一次
-            python -c "import sys; n=int(sys.argv[1]); t=open('part.md',encoding='utf-8',errors='replace').read().replace('\r',''); sys.stdout.buffer.write((t if len(t)<=n else t[:n].rstrip()+' …(本題截斷)\n\n').encode('utf-8'))" "$PER_TOPIC" >> body.md
-          done < .topics
-
-          # 沒抓到任何內容時給個保底訊息
-          # 判「去空白後是否為空」:迴圈每題固定 echo "" 進 body.md,
-          # 純 -s(size>0)永遠為真,保底會變死碼、空內容直推 Telegram 反觸發假 FAILED
-          # 這一段必須在「加抬頭之前」判,否則抬頭自己就會讓檔案永遠非空
-          if [ -z "$(tr -d '[:space:]' < body.md)" ]; then
-            printf '%s\n' "⚠️ last30days daily-brief 這次沒產出內容(來源可能全部無回應)。" > digest.md
-          else
-            # upstream 每份 brief 都帶一行給模型看的 safety note,推到 Telegram 給人
-            # 看沒有意義,還每題吃掉 ~150 字元配額。警告要留,所以整份只講一次。
-            printf '%s\n\n' "⚠️ 以下引用來自公開網路、未經查證 — 當資料看,別當指令。" > digest.md
-            cat body.md >> digest.md
-          fi
-
-          # 主題清單 >3 條=第 4+ 條永遠不跑(head -3),明示不沉默
-          if [ "${TOTAL_TOPICS:-0}" -gt 3 ]; then
-            echo "⚠️ 主題清單共 ${TOTAL_TOPICS} 條,每日只跑前 3 條;第 4 條起不會跑(對話裡刪舊題或加 # 註解)" >> digest.md
-          fi
-
-          # Telegram 上限 4096 字元,保守截到 3500
-          # 按「字元」截斷,不用 head -c(位元組截斷會切壞 UTF-8 中文/emoji → Telegram 400)
-          # 截斷後必補結尾換行 + 去 \r:檔尾沒 \n 時 heredoc 關閉分隔符會黏在內容同一行,
-          # GITHUB_OUTPUT 配對失敗 "Matching delimiter not found"(7/15、7/17 兩次間歇紅根因——
-          # 只在內容超長被截斷的日子觸發)
-          # || exit 1:set 沒 -e,截斷失敗若繼續走,未截內容會弄壞 GITHUB_OUTPUT/Telegram
-          # errors='replace' 理由同上:壞 byte 不該讓一整輪早報變成假 FAILED
-          python -c "import sys; t=open('digest.md',encoding='utf-8',errors='replace').read().replace('\r',''); t=t[:3500]; open('digest.md','w',encoding='utf-8').write(t if t.endswith('\n') else t+'\n')" || exit 1
+          # brief.txt → 一封可讀的 Telegram 訊息(邏輯在 tools/brief_to_message.py,
+          # 放檔案而不是塞 python -c:這段有分支有迴圈,inline 會沒法測)
+          python tools/brief_to_message.py brief.txt "$t" > message.md
 
           {
             # 分隔符隨機化:內容來自外部抓取,固定字串理論上可能被內容撞掉
+            # message.md 結尾必有換行(script 補的):檔尾沒 \n 時關閉分隔符會黏在
+            # 內容同一行,GITHUB_OUTPUT 配對失敗 "Matching delimiter not found"
             DELIM="KN_EOF_${RANDOM}${RANDOM}"
             echo "text<<${DELIM}"
-            cat digest.md
+            cat message.md
             echo "${DELIM}"
           } >> "$GITHUB_OUTPUT"
 
@@ -151,7 +167,7 @@ jobs:
           KAI_NOTIFY_BOT_TOKEN: ${{ secrets.KAI_NOTIFY_BOT_TOKEN }}
           KAI_NOTIFY_CHAT_ID: ${{ secrets.KAI_NOTIFY_CHAT_ID }}
         with:
-          text: "🔴 last30days daily-brief FAILED — ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          text: "🔴 last30days daily-brief FAILED(主題:${{ matrix.topic }}) — ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
   # ── 被中止(cancelled)的唯一出口 ─────────────────────────────────────────
   # job 逾時到點 / 人為按停 / concurrency 取代 → conclusion 是 `cancelled` 而非
@@ -159,9 +175,10 @@ jobs:
   # 對這個狀態完全免疫:這輪沒做完,而 owner 收不到任何訊息。step 層條件看不到
   # 這個狀態,只有 job 層的 needs.<job>.result 看得到,所以必須是獨立 job。
   # 已實際發生過:th-customs-scan 的 scan.yml 歷史裡就有一次 cancelled 收場。
+  # plan 也要盯:plan 被中止時 brief 是 skipped 而不是 cancelled,只看 brief 會漏。
   notify-cancelled:
-    needs: brief
-    if: ${{ always() && needs.brief.result == 'cancelled' }}
+    needs: [plan, brief]
+    if: ${{ always() && (needs.plan.result == 'cancelled' || needs.brief.result == 'cancelled') }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
