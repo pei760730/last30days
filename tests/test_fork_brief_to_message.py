@@ -260,3 +260,12 @@ def test_topic_words_do_not_create_false_similarity():
 
 def _title_tokens_helper(title, topic):
     return btm._title_tokens(title, topic)
+
+
+def test_kept_items_are_renumbered_contiguously():
+    """跳過近重複後編號不可以留缺口(實測出現過 1 / 2 / 4)。"""
+    msg = btm.build_message(
+        _brief(_EARNINGS_A, _EARNINGS_B, "Britain would be bonkers to ditch Palantir (score 42, Hacker News)"),
+        "Palantir PLTR",
+    )
+    assert [line.split(".")[0] for line in msg.splitlines() if line.startswith("### ")] == ["### 1", "### 2"]
