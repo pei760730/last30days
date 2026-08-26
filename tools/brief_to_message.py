@@ -44,6 +44,55 @@ _REDDIT_BOILERPLATE = re.compile(
 )
 
 
+# 近重複判定用。這些詞在標題裡到處都是,留著只會讓不相關的兩則看起來像。
+_STOPWORDS = frozenset(
+    """the a an of on in for to and or with is are was were be been at by as from
+    that this it its his her their they he she we you i not no more than after
+    over under about into out up down new just says said will would can could""".split()  # noqa: SIM905 — 區塊字串比 40 元素的 list literal 好讀好改
+)
+
+# 相似度門檻。用「重疊係數」(共同詞 / 較短那則的詞數),不是 Jaccard ——
+# 兩則長度差很多時 Jaccard 會被長的那則稀釋掉。
+#
+# 2026-08-26 拿真實標題量測校準:
+#   0.56  同一場財報的兩則("blowout quarter ... commercial revenue soaring 150%"
+#         vs "blowout Q2 earnings ... commercial revenue soaring nearly 150%") → 該合併
+#   0.50  Michael Burry 開空單 vs Burry 預測 PLTR 跌破 $1 → 同一人不同主張,該保留
+# 安全區間只有這一線,所以取 0.55。tests/test_fork_brief_to_message.py 把這兩個
+# 真實案例都釘住了,調門檻會直接紅。
+#
+# 這招只抓得到「近乎逐字重述」。同一事件但用詞完全不同(例如
+# "Palantir Shares Jump on 'Otherworldly' Sales" vs "Palantir soars 12% on
+# blowout quarter")量出來是 0.00 —— 純詞彙比對做不到,不要假裝它做得到。
+_NEAR_DUPLICATE = 0.55
+
+
+def _title_tokens(title: str, topic: str) -> set[str]:
+    """標題的內容詞。去掉 `### N.` 前綴、`(score N, 來源)` 後綴、停用詞。
+
+    主題本身的詞也要拿掉:每一則標題都含主題(「Palantir」),留著等於給
+    所有配對灌一個固定的假相似度。
+    """
+    text = re.sub(r"^###\s*\d+\.\s*", "", title.strip())
+    text = re.sub(r"\(score\s+\d+[^)]*\)\s*$", "", text).strip()
+    topic_words = set(re.findall(r"[a-z0-9]+", topic.lower()))
+    return {
+        w
+        for w in re.findall(r"[a-z0-9]+", text.lower())
+        if len(w) > 1 and w not in _STOPWORDS and w not in topic_words
+    }
+
+
+def _is_near_duplicate(tokens: set[str], seen: list[set[str]]) -> bool:
+    """跟已收錄的任何一則近乎重述?"""
+    for other in seen:
+        if not tokens or not other:
+            continue
+        if len(tokens & other) / min(len(tokens), len(other)) >= _NEAR_DUPLICATE:
+            return True
+    return False
+
+
 def _norm(text: str) -> str:
     """比對用的正規化:去標點、收空白、轉小寫。"""
     return re.sub(r"\W+", " ", text.lower()).strip()
@@ -84,14 +133,24 @@ def _head_lines(raw: str) -> list[str]:
     return out
 
 
-def _items(raw: str) -> list[str]:
-    """前 MAX_ITEMS 條 storyline,每條 = 標題 + 一段精簡引文。"""
+def _items(raw: str, topic: str = "") -> list[str]:
+    """前 MAX_ITEMS 條 storyline,每條 = 標題 + 一段精簡引文。
+
+    會跳過近乎重述前面某一則的條目 —— brief 一律產 8 條候選而我們只取 3,
+    所以跳過還有得補。2026-08-26 的 Palantir 早報三個位置全是同一場財報,
+    等於 owner 只拿到一條資訊。
+    """
     items: list[str] = []
+    seen_tokens: list[set[str]] = []
     for block in re.split(r"(?=^### )", raw, flags=re.MULTILINE):
         if not block.startswith("### "):
             continue
         lines = block.splitlines()
         title = lines[0].strip()
+        tokens = _title_tokens(title, topic)
+        if _is_near_duplicate(tokens, seen_tokens):
+            continue
+        seen_tokens.append(tokens)
         body: list[str] = []
         for line in lines[1:]:
             text = line.strip()
@@ -118,7 +177,7 @@ def _items(raw: str) -> list[str]:
 def build_message(raw: str, topic: str = "") -> str:
     """brief 全文 → 一封訊息。永遠回傳非空字串。"""
     head = _head_lines(raw)
-    items = _items(raw)
+    items = _items(raw, topic)
 
     body = "\n".join(head).strip()
     if items:
