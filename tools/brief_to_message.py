@@ -168,6 +168,10 @@ def _items(raw: str, topic: str = "") -> list[str]:
             quote = ""
         if len(quote) > SNIPPET:
             quote = quote[:SNIPPET].rstrip() + "…"
+        # 重新編號。標題帶的是 brief 的原始序號,跳過近重複之後會留下缺口
+        # (實測出現過 1 / 2 / 4),讀的人會以為漏了一則或壞掉 —— 那正是
+        # README「這三種現象不是壞掉」想避免的誤診。
+        title = re.sub(r"^###\s*\d+\.", f"### {len(items) + 1}.", title)
         items.append(f"{title}\n{quote}" if quote else title)
         if len(items) >= MAX_ITEMS:
             break
