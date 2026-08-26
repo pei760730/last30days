@@ -202,3 +202,61 @@ def test_quote_that_merely_starts_like_title_is_kept():
     )
     msg = btm.build_message(raw, "T")
     assert "backlog doubled" in msg
+
+
+# 以下兩則標題是 2026-08-26 早報 Palantir 那題的真實內容(三個位置全是同一場
+# 財報)。門檻校準就靠這兩個案例夾出來的區間,調動 _NEAR_DUPLICATE 會直接紅。
+_EARNINGS_A = "Palantir soars 12% on blowout quarter, with US commercial revenue soaring ~150% (score 69, Hacker News)"
+_EARNINGS_B = (
+    "JUST IN: Palantir $PLTR surges more than 10% after posting blowout Q2 earnings, "
+    "with U.S. commercial revenue soaring nearly 150%. (score 61, Reddit)"
+)
+_BURRY_A = (
+    "Michael Burry has shared updated positions. He says he opened a new short position "
+    "on CoreWeave $CRWV and added to short positions on: -Micron $MU -Semi ETF $SOXX "
+    "-Palantir $PLTR (score 48, Reddit)"
+)
+_BURRY_B = "Michael Burry says Palantir, $PLTR, will be at under $1 over the long run. (score 46, Reddit)"
+
+
+def _brief(*titles: str) -> str:
+    body = "".join(f"\n### {i}. {t}\n- body {i}\n" for i, t in enumerate(titles, 1))
+    return "# Production Brief: Palantir PLTR\n\n## Ranked Storylines\n" + body
+
+
+def test_near_verbatim_restatement_is_skipped():
+    """同一場財報的兩則措辭高度重疊 —— 第二則不該佔掉一個位置。"""
+    msg = btm.build_message(_brief(_EARNINGS_A, _EARNINGS_B, "Britain would be bonkers to ditch Palantir (score 42, Hacker News)"), "Palantir PLTR")
+    assert "blowout quarter" in msg
+    assert "JUST IN" not in msg
+    # 空出來的位置由後面的條目遞補,仍然給滿 3 條
+    assert "Britain would be bonkers" in msg
+
+
+def test_same_person_different_claims_are_kept():
+    """Burry 開空單 vs Burry 預測跌破 $1 是兩件事,不可以被當重複砍掉。"""
+    msg = btm.build_message(_brief(_BURRY_A, _BURRY_B), "Palantir PLTR")
+    assert "opened a new short position" in msg
+    assert "under $1 over the long run" in msg
+
+
+def test_unrelated_titles_are_never_merged():
+    msg = btm.build_message(
+        _brief(
+            "Is Spider-Man the reason Palantir stock is up 34%? (score 46, Reddit)",
+            "Britain would be bonkers to ditch Palantir (score 42, Hacker News)",
+        ),
+        "Palantir PLTR",
+    )
+    assert "Spider-Man" in msg
+    assert "Britain would be bonkers" in msg
+
+
+def test_topic_words_do_not_create_false_similarity():
+    """每則標題都含主題詞,若不排除會給所有配對灌假相似度。"""
+    a = _title_tokens_helper("Palantir PLTR quarterly earnings beat", "Palantir PLTR")
+    assert "palantir" not in a and "pltr" not in a
+
+
+def _title_tokens_helper(title, topic):
+    return btm._title_tokens(title, topic)
