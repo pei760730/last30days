@@ -27,68 +27,10 @@ import pytest
 HOOK = Path(__file__).resolve().parents[1] / "hooks" / "scripts" / "check-config.sh"
 POC_LINE = "x[$(touch RCE-PROOF.txt)]=1\n"
 NO_USABLE_BASH = "no usable bash on this machine — RCE-path tests run in CI"
-_BASH_PROBE_TIMEOUT_SECONDS = 3
-
-
-def _bash_candidates() -> list[str]:
-    """Return possible bash executables without starting subprocesses."""
-    windows_git_bash = (
-        Path(os.environ.get("ProgramFiles", r"C:\Program Files"))
-        / "Git"
-        / "bin"
-        / "bash.exe"
-        if os.name == "nt"
-        else None
-    )
-    seen: list[str] = []
-    for candidate in (
-        "/opt/homebrew/bin/bash",
-        "/usr/local/bin/bash",
-        windows_git_bash,
-        shutil.which("bash"),
-    ):
-        if not candidate:
-            continue
-        path = str(Path(candidate).resolve())
-        if path not in seen and Path(path).is_file():
-            seen.append(path)
-    return seen
-
-
-def _bash_is_usable(bash_path: str) -> bool:
-    # Windows may resolve bash to the WSL launcher stub. Probe lazily so a
-    # pathological binary can never abort test collection — and probe the
-    # capability the tests actually need: running a script FILE addressed by a
-    # native Windows path, exactly like `[bash, str(HOOK)]` below. A trivial
-    # `bash -c "echo ok"` is not discriminating enough: with a WSL distro
-    # installed the stub answers it, then eats the backslashes in
-    # `C:\...\check-config.sh` at test time ("C:Users..." → exit 127) — and
-    # does so flakily, which is worse than failing outright. Git Bash handles
-    # native paths and passes; WSL fails this probe deterministically.
-    try:
-        with tempfile.TemporaryDirectory() as td:
-            script = Path(td) / "probe.sh"
-            script.write_text("echo LAST30DAYS_BASH_PROBE_OK\n", encoding="utf-8")
-            result = subprocess.run(
-                [bash_path, str(script)],
-                stdin=subprocess.DEVNULL,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=_BASH_PROBE_TIMEOUT_SECONDS,
-                check=False,
-            )
-    except (OSError, subprocess.SubprocessError):
-        return False
-    return result.returncode == 0 and "LAST30DAYS_BASH_PROBE_OK" in (
-        result.stdout or ""
-    )
-
-
-def _bash_binaries() -> list[str]:
-    """Return only bash executables that successfully run a trivial script."""
-    return [candidate for candidate in _bash_candidates() if _bash_is_usable(candidate)]
+# bash discovery is shared across every bash-shelling test file — see
+# tests/_bash_compat.py for why a hand-copied which("bash") is not enough.
+from _bash_compat import BASH_PROBE_TIMEOUT_SECONDS as _BASH_PROBE_TIMEOUT_SECONDS
+from _bash_compat import usable_bash_binaries as _bash_binaries
 
 
 def _bash_major(bash_path: str) -> int:

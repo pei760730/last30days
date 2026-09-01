@@ -22,6 +22,8 @@ from pathlib import Path
 
 import pytest
 
+from _bash_compat import NO_USABLE_BASH, first_usable_bash
+
 HOOK = Path(__file__).resolve().parents[1] / "hooks" / "scripts" / "check-config.sh"
 
 
@@ -44,13 +46,16 @@ def _run_hook(env_overrides: dict[str, str], path_override: str | None = None) -
     env.update(env_overrides)
     if path_override is not None:
         env["PATH"] = path_override
-    bash_path = shutil.which("bash")
+    bash_path = first_usable_bash()
     if bash_path is None:
-        pytest.skip("bash not on PATH")
+        pytest.skip(NO_USABLE_BASH)
     return subprocess.run(
         [bash_path, str(HOOK)],
         capture_output=True,
         text=True,
+        # cp950 console would corrupt the hook's UTF-8 output without this.
+        encoding="utf-8",
+        errors="replace",
         env=env,
         timeout=30,
     )
@@ -108,7 +113,6 @@ def _parse_source_count(stdout: str) -> int:
     return int(match.group(1))
 
 
-@pytest.mark.skipif(shutil.which("bash") is None, reason="bash not on PATH")
 def test_new_user_with_ytdlp_says_youtube_works(tmp_path: Path):
     """A new user with yt-dlp on PATH should see YouTube flagged as already-working."""
     fake_bin = tmp_path / "fake_bin"
@@ -143,7 +147,6 @@ def test_new_user_with_ytdlp_says_youtube_works(tmp_path: Path):
     )
 
 
-@pytest.mark.skipif(shutil.which("bash") is None, reason="bash not on PATH")
 def test_new_user_without_ytdlp_unchanged_welcome(tmp_path: Path):
     """A new user without yt-dlp should see the original wizard-unlock copy."""
     path = _tool_path_without_ytdlp(tmp_path)
@@ -163,7 +166,6 @@ def test_new_user_without_ytdlp_unchanged_welcome(tmp_path: Path):
     )
 
 
-@pytest.mark.skipif(shutil.which("bash") is None, reason="bash not on PATH")
 def test_setup_done_user_source_count_includes_ytdlp(tmp_path: Path):
     """Regression: the setup-done path must count YouTube when yt-dlp is on PATH.
 
@@ -207,7 +209,6 @@ def test_setup_done_user_source_count_includes_ytdlp(tmp_path: Path):
     )
 
 
-@pytest.mark.skipif(shutil.which("bash") is None, reason="bash not on PATH")
 def test_keychain_credentials_avoid_new_user_welcome(tmp_path: Path):
     """macOS Keychain credentials should count as configured for the status hook."""
     fake_bin = tmp_path / "fake_bin_keychain"

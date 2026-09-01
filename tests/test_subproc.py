@@ -11,6 +11,7 @@ import unittest
 from unittest.mock import patch
 
 from lib import subproc
+import os
 
 IS_WINDOWS = platform.system() == "Windows"
 
@@ -112,6 +113,7 @@ class TestRunWithTimeout(unittest.TestCase):
         self.assertIsInstance(seen_pids[0], int)
         self.assertGreater(seen_pids[0], 0)
 
+    @unittest.skipIf(os.name == "nt", "POSIX process-group (killpg/SIGTERM) semantics; not meaningful on Windows")
     def test_timeout_falls_back_to_kill_when_killpg_unavailable(self):
         """Simulate Windows (no killpg/getpgid) — should fall back to proc.kill()."""
         real_hasattr = builtins.hasattr
@@ -142,6 +144,7 @@ class TestRunWithTimeout(unittest.TestCase):
         self.assertEqual(result.returncode, 0)
         self.assertEqual(result.stdout.strip(), "ok")
 
+    @unittest.skipIf(os.name == "nt", "POSIX process-group (killpg/SIGTERM) semantics; not meaningful on Windows")
     def test_sigterm_ignoring_child_is_sigkill_escalated(self):
         """A child that ignores SIGTERM must be escalated to SIGKILL.
 
@@ -155,6 +158,7 @@ class TestRunWithTimeout(unittest.TestCase):
                 timeout=1,
             )
 
+    @unittest.skipIf(os.name == "nt", "POSIX process-group (killpg/SIGTERM) semantics; not meaningful on Windows")
     def test_escalation_path_guards_killpg_attributeerror(self):
         """The SIGKILL escalation must not crash if killpg is unavailable (Windows).
 

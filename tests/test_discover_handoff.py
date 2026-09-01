@@ -469,6 +469,7 @@ def test_error_bundle_empty_nominations_list_fails_closed(tmp_path):
     hasattr(os, "geteuid") and os.geteuid() == 0,
     reason="root ignores directory permission bits",
 )
+@pytest.mark.skipif(os.name == "nt", reason="POSIX unwritable-dir semantics; chmod 0o500 does not deny writes on Windows")
 def test_write_bundle_unwritable_dir_is_contract_error_not_traceback(tmp_path):
     """A locked/read-only/full state dir must be the protocol's clean exit-2
     path (HandoffContractError naming the path), never a raw OSError."""

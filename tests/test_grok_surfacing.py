@@ -44,7 +44,7 @@ def test_quality_nudge_offers_grok_but_does_not_call_it_free():
 
 
 def test_configuration_documents_the_grok_path_as_opt_in():
-    text = (REPO / "CONFIGURATION.md").read_text()
+    text = (REPO / "CONFIGURATION.md").read_text(encoding="utf-8")
     assert "Grok CLI (opt-in backup)" in text
     assert "grok login" in text
     # Document that grok requires a pin.
@@ -53,20 +53,20 @@ def test_configuration_documents_the_grok_path_as_opt_in():
 
 def test_configuration_pin_row_lists_grok_last():
     """Pin row shows all backends with grok last (opt-in)."""
-    text = (REPO / "CONFIGURATION.md").read_text()
+    text = (REPO / "CONFIGURATION.md").read_text(encoding="utf-8")
     # New order: bird first, grok last (opt-in).
     assert "`bird` / `xai` / `xurl` / `xquik` / `grok`" in text
 
 
 def test_configuration_does_not_claim_grok_is_free():
-    text = (REPO / "CONFIGURATION.md").read_text()
+    text = (REPO / "CONFIGURATION.md").read_text(encoding="utf-8")
     section = text[text.index("Grok CLI (opt-in backup)"):][:1200]
     assert "draws on your Grok plan" in section or "draw on your Grok plan" in section
 
 
 def test_configuration_documents_bird_first_chain():
     """Auto chain is bird first: cookies beat XAI_API_KEY."""
-    text = (REPO / "CONFIGURATION.md").read_text()
+    text = (REPO / "CONFIGURATION.md").read_text(encoding="utf-8")
     assert "bird first" in text.lower() or "bird (browser cookies) → xai" in text.lower()
 
 
@@ -75,7 +75,7 @@ def test_changelog_fragments_exist_and_changelog_is_untouched():
         list((REPO / "changelog.d").glob("*bird*"))
     if not frags:
         # Release PRs consume fragments into CHANGELOG.md via towncrier.
-        changelog = (REPO / "CHANGELOG.md").read_text()
+        changelog = (REPO / "CHANGELOG.md").read_text(encoding="utf-8")
         # Old text or new text about X backend changes.
         assert "X search now works with no X credential" in changelog or "bird first" in changelog.lower()
         return
@@ -85,7 +85,7 @@ def test_changelog_fragments_exist_and_changelog_is_untouched():
 # --- SKILL.md unlock surfaces ---------------------------------------------
 
 def _skill_md():
-    return (REPO / "skills" / "last30days" / "SKILL.md").read_text()
+    return (REPO / "skills" / "last30days" / "SKILL.md").read_text(encoding="utf-8")
 
 
 def test_skill_md_does_not_check_grok_first():

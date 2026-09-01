@@ -5,6 +5,7 @@ import stat
 from pathlib import Path
 
 from lib import env, setup_wizard
+import unittest
 
 
 def _mode(path: Path) -> int:
@@ -12,12 +13,14 @@ def _mode(path: Path) -> int:
 
 
 class TestSecureEnvWrite:
+    @unittest.skipIf(os.name == "nt", "POSIX mode-bit semantics; chmod is a no-op on Windows (NTFS ACLs)")
     def test_new_env_file_is_0600(self, tmp_path):
         env_path = tmp_path / "cfg" / ".env"
         assert setup_wizard.write_setup_config(env_path, from_browser="auto") is True
         assert env_path.exists()
         assert _mode(env_path) == 0o600
 
+    @unittest.skipIf(os.name == "nt", "POSIX mode-bit semantics; chmod is a no-op on Windows (NTFS ACLs)")
     def test_existing_loose_file_tightened_to_0600(self, tmp_path):
         env_path = tmp_path / ".env"
         env_path.write_text("EXISTING_KEY=value\n", encoding="utf-8")

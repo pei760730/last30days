@@ -19,6 +19,7 @@ from unittest import mock
 import pytest
 
 from lib import health
+import unittest
 
 
 @pytest.fixture(autouse=True)
@@ -126,6 +127,7 @@ class TestBroken:
         assert "printing-press-library" in probe.prescription
         assert "install digg --cli-only" in probe.prescription
 
+    @unittest.skipIf(os.name == "nt", "POSIX shim/probe semantics (extension-less executables); not runnable on Windows")
     def test_real_stale_shim_on_disk(self, tmp_path, monkeypatch):
         """Integration: a real file whose shebang interpreter is gone (#692)."""
         shim = tmp_path / "fake-pp-cli"
@@ -170,6 +172,7 @@ class TestOk:
         assert probe.prescription == ""
         assert "2026.06.09" in probe.detail
 
+    @unittest.skipIf(os.name == "nt", "POSIX shim/probe semantics (extension-less executables); not runnable on Windows")
     def test_real_healthy_binary_end_to_end(self, tmp_path, monkeypatch):
         """Integration: a real executable on a real PATH, no mocks."""
         binary = tmp_path / "fake-pp-cli"
@@ -282,6 +285,7 @@ class TestWindowsPrintingPressCandidates:
              mock.patch.dict(os.environ, env_clean, clear=True):
             assert health.windows_printing_press_bin_dir() is None
 
+    @unittest.skipIf(os.name == "nt", "POSIX shim/probe semantics (extension-less executables); not runnable on Windows")
     def test_posix_has_no_windows_dir(self, tmp_path):
         with mock.patch.dict(os.environ, {"LOCALAPPDATA": str(tmp_path)}):
             assert health.windows_printing_press_bin_dir() is None
