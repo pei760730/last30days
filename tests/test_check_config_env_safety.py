@@ -18,20 +18,33 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 
 HOOK = Path(__file__).resolve().parents[1] / "hooks" / "scripts" / "check-config.sh"
 POC_LINE = "x[$(touch RCE-PROOF.txt)]=1\n"
+NO_USABLE_BASH = "no usable bash on this machine — RCE-path tests run in CI"
+_BASH_PROBE_TIMEOUT_SECONDS = 3
 
 
-def _bash_binaries() -> list[str]:
-    """Prefer modern bash (4+) when present so the RCE path is actually exercised."""
+def _bash_candidates() -> list[str]:
+    """Return possible bash executables without starting subprocesses."""
+    windows_git_bash = (
+        Path(os.environ.get("ProgramFiles", r"C:\Program Files"))
+        / "Git"
+        / "bin"
+        / "bash.exe"
+        if os.name == "nt"
+        else None
+    )
     seen: list[str] = []
     for candidate in (
         "/opt/homebrew/bin/bash",
         "/usr/local/bin/bash",
+        windows_git_bash,
         shutil.which("bash"),
     ):
         if not candidate:
@@ -42,14 +55,59 @@ def _bash_binaries() -> list[str]:
     return seen
 
 
-def _bash_major(bash_path: str) -> int:
-    result = subprocess.run(
-        [bash_path, "-c", 'echo "${BASH_VERSINFO[0]}"'],
-        capture_output=True,
-        text=True,
-        timeout=10,
-        check=False,
+def _bash_is_usable(bash_path: str) -> bool:
+    # Windows may resolve bash to the WSL launcher stub. Probe lazily so a
+    # pathological binary can never abort test collection — and probe the
+    # capability the tests actually need: running a script FILE addressed by a
+    # native Windows path, exactly like `[bash, str(HOOK)]` below. A trivial
+    # `bash -c "echo ok"` is not discriminating enough: with a WSL distro
+    # installed the stub answers it, then eats the backslashes in
+    # `C:\...\check-config.sh` at test time ("C:Users..." → exit 127) — and
+    # does so flakily, which is worse than failing outright. Git Bash handles
+    # native paths and passes; WSL fails this probe deterministically.
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            script = Path(td) / "probe.sh"
+            script.write_text("echo LAST30DAYS_BASH_PROBE_OK\n", encoding="utf-8")
+            result = subprocess.run(
+                [bash_path, str(script)],
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=_BASH_PROBE_TIMEOUT_SECONDS,
+                check=False,
+            )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return result.returncode == 0 and "LAST30DAYS_BASH_PROBE_OK" in (
+        result.stdout or ""
     )
+
+
+def _bash_binaries() -> list[str]:
+    """Return only bash executables that successfully run a trivial script."""
+    return [candidate for candidate in _bash_candidates() if _bash_is_usable(candidate)]
+
+
+def _bash_major(bash_path: str) -> int:
+    try:
+        result = subprocess.run(
+            [bash_path, "-c", 'echo "${BASH_VERSINFO[0]}"'],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            # text=True alone decodes with the console codepage (cp950 on this
+            # owner's Windows); the hook emits UTF-8, so pin the decoding or a
+            # single multibyte character turns stdout into a decode error.
+            encoding="utf-8",
+            errors="replace",
+            timeout=_BASH_PROBE_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return 0
     try:
         return int((result.stdout or "").strip() or "0")
     except ValueError:
@@ -112,6 +170,10 @@ def _run_hook(
         [bash_path, str(HOOK)],
         capture_output=True,
         text=True,
+        # Same cp950 trap as _bash_major: without an explicit encoding the
+        # hook's UTF-8 output fails to decode on Windows and stdout reads None.
+        encoding="utf-8",
+        errors="replace",
         env=env,
         cwd=str(cwd),
         timeout=30,
@@ -119,13 +181,16 @@ def _run_hook(
     )
 
 
-@pytest.fixture(params=_bash_binaries())
-def bash_path(request: pytest.FixtureRequest) -> str:
-    return request.param
+@pytest.fixture(scope="session")
+def bash_binaries() -> tuple[str, ...]:
+    """Probe bash candidates at test runtime, after collection has completed."""
+    binaries = tuple(_bash_binaries())
+    if not binaries:
+        pytest.skip(NO_USABLE_BASH)
+    return binaries
 
 
-@pytest.mark.skipif(not _bash_binaries(), reason="bash not on PATH")
-def test_malicious_project_env_key_does_not_execute(bash_path: str, tmp_path: Path):
+def _check_malicious_project_env_key_does_not_execute(bash_path: str, tmp_path: Path):
     """Reporter PoC: crafted key must not run, even under bash 4+/5."""
     project = tmp_path / "repo"
     env_file = project / ".claude" / "last30days.env"
@@ -149,8 +214,7 @@ def test_malicious_project_env_key_does_not_execute(bash_path: str, tmp_path: Pa
     )
 
 
-@pytest.mark.skipif(not _bash_binaries(), reason="bash not on PATH")
-def test_malicious_key_blocked_even_when_project_trusted(bash_path: str, tmp_path: Path):
+def _check_malicious_key_blocked_even_when_project_trusted(bash_path: str, tmp_path: Path):
     """Identifier gate must hold even after an explicit trust opt-in."""
     project = tmp_path / "repo"
     env_file = project / ".claude" / "last30days.env"
@@ -176,8 +240,7 @@ def test_malicious_key_blocked_even_when_project_trusted(bash_path: str, tmp_pat
     assert "Ready" in result.stdout
 
 
-@pytest.mark.skipif(not _bash_binaries(), reason="bash not on PATH")
-def test_untrusted_project_env_is_ignored(bash_path: str, tmp_path: Path):
+def _check_untrusted_project_env_is_ignored(bash_path: str, tmp_path: Path):
     """Without LAST30DAYS_TRUST_PROJECT_CONFIG, project file is not read or chmod'd."""
     project = tmp_path / "repo"
     env_file = project / ".claude" / "last30days.env"
@@ -209,8 +272,7 @@ def test_untrusted_project_env_is_ignored(bash_path: str, tmp_path: Path):
         assert "Ready to use" in result.stdout
 
 
-@pytest.mark.skipif(not _bash_binaries(), reason="bash not on PATH")
-def test_trusted_project_env_loads_normal_keys(bash_path: str, tmp_path: Path):
+def _check_trusted_project_env_loads_normal_keys(bash_path: str, tmp_path: Path):
     project = tmp_path / "repo"
     env_file = project / ".claude" / "last30days.env"
     env_file.parent.mkdir(parents=True)
@@ -238,8 +300,7 @@ def test_trusted_project_env_loads_normal_keys(bash_path: str, tmp_path: Path):
     _assert_mode(env_file, "600")
 
 
-@pytest.mark.skipif(not _bash_binaries(), reason="bash not on PATH")
-def test_global_trust_signal_unlocks_project_env(bash_path: str, tmp_path: Path):
+def _check_global_trust_signal_unlocks_project_env(bash_path: str, tmp_path: Path):
     """Trust from ~/.config (via LAST30DAYS_CONFIG_DIR) unlocks project overlay."""
     config_dir = tmp_path / "config"
     config_dir.mkdir()
@@ -270,8 +331,7 @@ def test_global_trust_signal_unlocks_project_env(bash_path: str, tmp_path: Path)
     _assert_mode(env_file, "600")
 
 
-@pytest.mark.skipif(not _bash_binaries(), reason="bash not on PATH")
-def test_process_deny_overrides_global_trust(bash_path: str, tmp_path: Path):
+def _check_process_deny_overrides_global_trust(bash_path: str, tmp_path: Path):
     config_dir = tmp_path / "config"
     config_dir.mkdir()
     (config_dir / ".env").write_text(
@@ -302,8 +362,7 @@ def test_process_deny_overrides_global_trust(bash_path: str, tmp_path: Path):
     _assert_mode(env_file, "644")
 
 
-@pytest.mark.skipif(not _bash_binaries(), reason="bash not on PATH")
-def test_trusted_project_env_discovered_from_nested_cwd(bash_path: str, tmp_path: Path):
+def _check_trusted_project_env_discovered_from_nested_cwd(bash_path: str, tmp_path: Path):
     """Mirror lib/env.py: walk up from a subdirectory to the repo-root project env."""
     repo = tmp_path / "repo"
     nested = repo / "apps" / "web"
@@ -334,8 +393,7 @@ def test_trusted_project_env_discovered_from_nested_cwd(bash_path: str, tmp_path
     _assert_mode(env_file, "600")
 
 
-@pytest.mark.skipif(not _bash_binaries(), reason="bash not on PATH")
-def test_project_env_walk_stops_at_git_root(bash_path: str, tmp_path: Path):
+def _check_project_env_walk_stops_at_git_root(bash_path: str, tmp_path: Path):
     """An env above the git root must not be discovered (matches lib/env.py)."""
     outside = tmp_path / ".claude" / "last30days.env"
     outside.parent.mkdir(parents=True)
@@ -370,8 +428,7 @@ def test_project_env_walk_stops_at_git_root(bash_path: str, tmp_path: Path):
         assert "Ready to use" in result.stdout
 
 
-@pytest.mark.skipif(not _bash_binaries(), reason="bash not on PATH")
-def test_malicious_key_in_global_env_also_blocked(bash_path: str, tmp_path: Path):
+def _check_malicious_key_in_global_env_also_blocked(bash_path: str, tmp_path: Path):
     """Identifier gate applies to the global file too (defense in depth)."""
     config_dir = tmp_path / "config"
     config_dir.mkdir()
@@ -395,12 +452,85 @@ def test_malicious_key_in_global_env_also_blocked(bash_path: str, tmp_path: Path
     assert "Ready" in result.stdout
 
 
-@pytest.mark.skipif(
-    not any(_bash_major(b) >= 4 for b in _bash_binaries()),
-    reason="needs bash 4+ to exercise printf -v RCE",
-)
-def test_rce_path_exercised_on_modern_bash(tmp_path: Path):
+def _check_each_bash(
+    check: Callable[[str, Path], None],
+    bash_binaries: tuple[str, ...],
+    tmp_path: Path,
+) -> None:
+    for index, bash_path in enumerate(bash_binaries):
+        bash_tmp_path = tmp_path if index == 0 else tmp_path / f"bash-{index}"
+        bash_tmp_path.mkdir(exist_ok=True)
+        check(bash_path, bash_tmp_path)
+
+
+def test_malicious_project_env_key_does_not_execute(
+    bash_binaries: tuple[str, ...], tmp_path: Path
+):
+    _check_each_bash(
+        _check_malicious_project_env_key_does_not_execute, bash_binaries, tmp_path
+    )
+
+
+def test_malicious_key_blocked_even_when_project_trusted(
+    bash_binaries: tuple[str, ...], tmp_path: Path
+):
+    _check_each_bash(
+        _check_malicious_key_blocked_even_when_project_trusted, bash_binaries, tmp_path
+    )
+
+
+def test_untrusted_project_env_is_ignored(
+    bash_binaries: tuple[str, ...], tmp_path: Path
+):
+    _check_each_bash(_check_untrusted_project_env_is_ignored, bash_binaries, tmp_path)
+
+
+def test_trusted_project_env_loads_normal_keys(
+    bash_binaries: tuple[str, ...], tmp_path: Path
+):
+    _check_each_bash(_check_trusted_project_env_loads_normal_keys, bash_binaries, tmp_path)
+
+
+def test_global_trust_signal_unlocks_project_env(
+    bash_binaries: tuple[str, ...], tmp_path: Path
+):
+    _check_each_bash(_check_global_trust_signal_unlocks_project_env, bash_binaries, tmp_path)
+
+
+def test_process_deny_overrides_global_trust(
+    bash_binaries: tuple[str, ...], tmp_path: Path
+):
+    _check_each_bash(_check_process_deny_overrides_global_trust, bash_binaries, tmp_path)
+
+
+def test_trusted_project_env_discovered_from_nested_cwd(
+    bash_binaries: tuple[str, ...], tmp_path: Path
+):
+    _check_each_bash(
+        _check_trusted_project_env_discovered_from_nested_cwd, bash_binaries, tmp_path
+    )
+
+
+def test_project_env_walk_stops_at_git_root(
+    bash_binaries: tuple[str, ...], tmp_path: Path
+):
+    _check_each_bash(_check_project_env_walk_stops_at_git_root, bash_binaries, tmp_path)
+
+
+def test_malicious_key_in_global_env_also_blocked(
+    bash_binaries: tuple[str, ...], tmp_path: Path
+):
+    _check_each_bash(
+        _check_malicious_key_in_global_env_also_blocked, bash_binaries, tmp_path
+    )
+
+
+def test_rce_path_exercised_on_modern_bash(
+    bash_binaries: tuple[str, ...], tmp_path: Path
+):
     """Sanity: at least one bash>=4 is under test so the PoC path is real, not vacuous."""
-    modern = [b for b in _bash_binaries() if _bash_major(b) >= 4]
+    modern = [b for b in bash_binaries if _bash_major(b) >= 4]
+    if not modern:
+        pytest.skip("needs bash 4+ to exercise printf -v RCE")
     assert modern, "expected a bash 4+ binary from _bash_binaries()"
-    test_malicious_key_blocked_even_when_project_trusted(modern[0], tmp_path)
+    _check_malicious_key_blocked_even_when_project_trusted(modern[0], tmp_path)
