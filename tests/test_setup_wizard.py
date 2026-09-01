@@ -9,6 +9,7 @@ from unittest.mock import patch, MagicMock
 import pytest
 
 from lib import setup_wizard
+import unittest
 
 
 class _NtOs:
@@ -377,6 +378,7 @@ class TestDiggAutoInstall:
 
     @patch("lib.cookie_extract.extract_cookies_with_source", return_value=None)
     @patch("shutil.which")
+    @unittest.skipIf(os.name == "nt", "POSIX install-path taxonomy ($HOME/.local/bin, npx shims); not meaningful on Windows")
     def test_digg_prior_install_off_path(self, mock_which, mock_extract, tmp_path, monkeypatch):
         """pp-digg CLI at ~/.local/bin but not on PATH -> installed_off_path, no npx."""
         self._empty_home(tmp_path, monkeypatch)
@@ -398,6 +400,7 @@ class TestDiggAutoInstall:
     @patch("lib.cookie_extract.extract_cookies_with_source", return_value=None)
     @patch("subprocess.run")
     @patch("shutil.which")
+    @unittest.skipIf(os.name == "nt", "POSIX install-path taxonomy ($HOME/.local/bin, npx shims); not meaningful on Windows")
     def test_digg_install_zero_but_not_on_path(self, mock_which, mock_subproc, mock_extract, tmp_path, monkeypatch):
         """rc=0, binary at $HOME/.local/bin but not on PATH -> installed_off_path."""
         self._empty_home(tmp_path, monkeypatch)
@@ -534,6 +537,7 @@ class TestWriteSetupConfig:
 class TestWriteApiKey:
     """Tests for write_api_key() — persisting the ScrapeCreators signup key."""
 
+    @unittest.skipIf(os.name == "nt", "POSIX mode-bit semantics; chmod is a no-op on Windows (NTFS ACLs)")
     def test_writes_key_with_secret_permissions(self):
         """Key is written and the file is 0o600 (owner read/write only)."""
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -604,6 +608,7 @@ class TestWriteApiKey:
             assert setup_wizard.write_api_key(env_path, "") is False
             assert not env_path.exists()
 
+    @unittest.skipIf(os.name == "nt", "POSIX unwritable-dir semantics; chmod 0o500 does not deny writes on Windows")
     def test_unwritable_target_returns_false(self):
         """Unwritable target dir -> False, no exception escapes."""
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -750,6 +755,7 @@ class TestGetSetupStatusText:
         assert "Digg CLI install failed" in text
         assert "printing-press-library" in text
 
+    @unittest.skipIf(os.name == "nt", "POSIX install-path taxonomy ($HOME/.local/bin, npx shims); not meaningful on Windows")
     def test_status_text_digg_installed_off_path(self):
         home = Path.home()
         digg_path = str(home / ".local" / "bin" / "digg-pp-cli")
@@ -762,6 +768,7 @@ class TestGetSetupStatusText:
         assert "$HOME/.local/bin" in text
         assert "now active" not in text.lower()
 
+    @unittest.skipIf(os.name == "nt", "POSIX install-path taxonomy ($HOME/.local/bin, npx shims); not meaningful on Windows")
     def test_status_text_digg_installed_off_path_legacy_go_bin(self):
         """PATH hint names the actual install dir as $HOME-relative, not ~/.local/bin."""
         home = Path.home()

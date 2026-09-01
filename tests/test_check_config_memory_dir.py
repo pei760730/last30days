@@ -24,6 +24,8 @@ from pathlib import Path
 
 import pytest
 
+from _bash_compat import NO_USABLE_BASH, first_usable_bash
+
 HOOK = Path(__file__).resolve().parents[1] / "hooks" / "scripts" / "check-config.sh"
 
 
@@ -33,17 +35,22 @@ def _run_hook(env_overrides: dict[str, str], cwd: Path | None = None) -> subproc
     for k in ("LAST30DAYS_MEMORY_DIR", "SETUP_COMPLETE", "LAST30DAYS_CONFIG_DIR"):
         env.pop(k, None)
     env.update(env_overrides)
+    bash = first_usable_bash()
+    if bash is None:
+        pytest.skip(NO_USABLE_BASH)
     return subprocess.run(
-        ["bash", str(HOOK)],
+        [bash, str(HOOK)],
         capture_output=True,
         text=True,
+        # cp950 console would corrupt the hook's UTF-8 output without this.
+        encoding="utf-8",
+        errors="replace",
         env=env,
         cwd=str(cwd) if cwd else None,
         timeout=30,
     )
 
 
-@pytest.mark.skipif(shutil.which("bash") is None, reason="bash not on PATH")
 def test_creates_dir_when_memory_dir_missing(tmp_path: Path):
     target = tmp_path / "Last30Days"
     assert not target.exists()
@@ -54,7 +61,6 @@ def test_creates_dir_when_memory_dir_missing(tmp_path: Path):
     assert target.is_dir(), "LAST30DAYS_MEMORY_DIR was not created"
 
 
-@pytest.mark.skipif(shutil.which("bash") is None, reason="bash not on PATH")
 def test_no_error_when_memory_dir_already_exists(tmp_path: Path):
     target = tmp_path / "Last30Days"
     target.mkdir()
@@ -67,7 +73,6 @@ def test_no_error_when_memory_dir_already_exists(tmp_path: Path):
     assert sentinel.read_text() == "preserve me", "existing dir contents were disturbed"
 
 
-@pytest.mark.skipif(shutil.which("bash") is None, reason="bash not on PATH")
 def test_default_memory_dir_created_when_unset(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     # Override $HOME so the default fallback path lands inside tmp_path.
     fake_home = tmp_path / "home"
@@ -84,7 +89,6 @@ def test_default_memory_dir_created_when_unset(tmp_path: Path, monkeypatch: pyte
     assert expected.is_dir(), f"default dir {expected} was not created"
 
 
-@pytest.mark.skipif(shutil.which("bash") is None, reason="bash not on PATH")
 def test_tolerates_unwritable_memory_dir(tmp_path: Path):
     """Hook should swallow mkdir errors and still exit 0 — never crash Claude Code startup."""
     # /proc/1 is owned by root; under sandboxed runners this will fail with EACCES.

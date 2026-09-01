@@ -451,6 +451,8 @@ def test_discovery_cli_json_contract_and_mutual_exclusion():
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         check=False,
     )
     assert result.returncode == 0, result.stderr
@@ -479,6 +481,8 @@ def test_discovery_cli_json_contract_and_mutual_exclusion():
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         check=False,
     )
     assert invalid.returncode == 2
@@ -497,6 +501,8 @@ def test_discovery_cli_json_contract_and_mutual_exclusion():
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         check=False,
     )
     assert drill_conflict.returncode == 2
@@ -591,6 +597,8 @@ def test_discovery_cli_mock_render_has_no_angle_or_pipeline_lines():
             cwd=REPO_ROOT,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+        errors="replace",
             check=False,
         )
 
@@ -616,6 +624,8 @@ def test_discovery_cli_bare_discover_is_global_trending():
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         check=False,
     )
     assert result.returncode == 0, result.stderr
@@ -639,6 +649,8 @@ def test_discovery_cli_shallow_skips_enrichment():
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         check=False,
     )
     assert result.returncode == 0, result.stderr
@@ -663,6 +675,8 @@ def test_discovery_cli_rejects_shallow_without_discover():
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         check=False,
     )
     assert result.returncode == 2
@@ -683,6 +697,8 @@ def test_discovery_cli_rejects_historical_as_of():
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         check=False,
     )
 
@@ -705,6 +721,8 @@ def test_discovery_filters_incompatible_default_sources_but_rejects_explicit_onl
         env={**os.environ, "LAST30DAYS_DEFAULT_SEARCH": "reddit,x,youtube,hn"},
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         check=False,
     )
     assert default_result.returncode == 0, default_result.stderr
@@ -721,6 +739,8 @@ def test_discovery_filters_incompatible_default_sources_but_rejects_explicit_onl
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         check=False,
     )
     assert explicit_result.returncode == 2
@@ -1092,6 +1112,8 @@ def test_discovery_mock_run_writes_no_research_db(tmp_path):
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         check=False,
     )
     assert result.returncode == 0, result.stderr
@@ -1208,6 +1230,8 @@ def test_queue_cover_cli_unknown_name_subprocess_exit_code(tmp_path):
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         check=False,
     )
     assert result.returncode == 2
@@ -1240,6 +1264,8 @@ def _run_protocol_cli(argv: list[str], env_overrides: dict[str, str] | None = No
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         check=False,
         env={**os.environ, **(env_overrides or {})},
     )
@@ -2209,6 +2235,7 @@ def test_discovery_cli_finalize_wrong_kind_or_version_exits_2(tmp_path, capsys):
     hasattr(os, "geteuid") and os.geteuid() == 0,
     reason="root ignores directory permission bits",
 )
+@pytest.mark.skipif(os.name == "nt", reason="POSIX unwritable-dir semantics; chmod 0o500 does not deny writes on Windows")
 def test_discovery_cli_resume_unwritable_pending_write_is_contract_error(tmp_path, capsys):
     """F9: the leg-2 pending-report write gets the same fail-closed treatment
     as the bundle write - a read-only state dir is HandoffContractError

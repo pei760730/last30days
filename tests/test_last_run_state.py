@@ -8,6 +8,8 @@ import subprocess
 import sys
 import tempfile
 import unittest
+
+from _bash_compat import NO_USABLE_BASH, first_usable_bash
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest import mock
@@ -18,6 +20,15 @@ from lib import schema
 REPO_ROOT = Path(__file__).resolve().parents[1]
 LAST30DAYS_SCRIPT = REPO_ROOT / "skills" / "last30days" / "scripts" / "last30days.py"
 SKILL_MD = REPO_ROOT / "skills" / "last30days" / "SKILL.md"
+
+
+def _require_bash() -> str:
+    # which("bash") alone admits the WSL launcher stub on Windows, which
+    # mangles native paths; the shared probe verifies real script execution.
+    bash = first_usable_bash()
+    if bash is None:
+        raise unittest.SkipTest(NO_USABLE_BASH)
+    return bash
 
 
 def run_last30days(topic: str, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
@@ -327,7 +338,6 @@ class LastRunStateTests(unittest.TestCase):
             self.assertIn("No matching cached report data", stderr.getvalue())
             self.assertIn("Cached synthesis body.", stdout.getvalue())
 
-    @unittest.skipIf(shutil.which("bash") is None, "bash not available")
     def test_hook_reads_last_run_from_custom_config_dir(self):
         with tempfile.TemporaryDirectory() as tmp:
             config_dir = Path(tmp) / "custom-config"
@@ -347,11 +357,13 @@ class LastRunStateTests(unittest.TestCase):
             env["LAST30DAYS_CONFIG_DIR"] = str(config_dir)
 
             result = subprocess.run(
-                ["bash", "hooks/scripts/check-config.sh"],
+                [_require_bash(), "hooks/scripts/check-config.sh"],
                 cwd=REPO_ROOT,
                 env=env,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 check=False,
             )
 
@@ -367,11 +379,13 @@ class LastRunStateTests(unittest.TestCase):
             env["ENV_SCRAPECREATORS_API_KEY"] = "sk-test"
 
             result = subprocess.run(
-                ["bash", "hooks/scripts/check-config.sh"],
+                [_require_bash(), "hooks/scripts/check-config.sh"],
                 cwd=REPO_ROOT,
                 env=env,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 check=False,
             )
 
@@ -396,11 +410,13 @@ class LastRunStateTests(unittest.TestCase):
             env["HOME"] = str(home)
 
             result = subprocess.run(
-                ["bash", "hooks/scripts/check-config.sh"],
+                [_require_bash(), "hooks/scripts/check-config.sh"],
                 cwd=REPO_ROOT,
                 env=env,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 check=False,
             )
 
@@ -424,11 +440,13 @@ class LastRunStateTests(unittest.TestCase):
             env.pop(key, None)
         env.update(env_overrides)
         return subprocess.run(
-            ["bash", "hooks/scripts/check-config.sh"],
+            [_require_bash(), "hooks/scripts/check-config.sh"],
             cwd=REPO_ROOT,
             env=env,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             check=False,
         )
 
@@ -493,11 +511,13 @@ class LastRunStateTests(unittest.TestCase):
             env["LAST30DAYS_CONFIG_DIR"] = str(config_dir)
 
             result = subprocess.run(
-                ["bash", "hooks/scripts/check-config.sh"],
+                [_require_bash(), "hooks/scripts/check-config.sh"],
                 cwd=REPO_ROOT,
                 env=env,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 check=False,
             )
 
@@ -540,6 +560,10 @@ class TestSkillMdFirstRunReference(unittest.TestCase):
 class TestCheckPermsAutoFix(unittest.TestCase):
     """check_perms should auto-fix loose .env permissions instead of warning only."""
 
+    @unittest.skipIf(
+        os.name == "nt",
+        "POSIX mode-bit semantics; chmod is a no-op on Windows (NTFS ACLs)",
+    )
     def test_loose_env_is_tightened_by_check_perms(self):
         with tempfile.TemporaryDirectory() as tmp:
             config_dir = Path(tmp) / ".config" / "last30days"
@@ -553,11 +577,13 @@ class TestCheckPermsAutoFix(unittest.TestCase):
             env["LAST30DAYS_CONFIG_DIR"] = str(config_dir)
 
             result = subprocess.run(
-                ["bash", "hooks/scripts/check-config.sh"],
+                [_require_bash(), "hooks/scripts/check-config.sh"],
                 cwd=REPO_ROOT,
                 env=env,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 check=False,
             )
 

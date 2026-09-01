@@ -4,6 +4,8 @@ import subprocess
 from unittest import mock
 
 from lib import health, pipeline
+import os
+import unittest
 
 
 class TestProbeCommand:
@@ -12,16 +14,19 @@ class TestProbeCommand:
         assert result.state == health.MISSING
         assert not result.usable
 
+    @unittest.skipIf(os.name == "nt", "POSIX shim/probe semantics (extension-less executables); not runnable on Windows")
     def test_ok_on_exit_zero(self):
         result = health.probe_command(["true"])
         assert result.state == health.OK
         assert result.ok
 
+    @unittest.skipIf(os.name == "nt", "POSIX shim/probe semantics (extension-less executables); not runnable on Windows")
     def test_error_on_nonzero_exit(self):
         result = health.probe_command(["false"])
         assert result.state == health.ERROR
         assert not result.ok
 
+    @unittest.skipIf(os.name == "nt", "POSIX shim/probe semantics (extension-less executables); not runnable on Windows")
     def test_timeout(self):
         result = health.probe_command(["sleep", "5"], timeout=0.1)
         assert result.state == health.TIMEOUT

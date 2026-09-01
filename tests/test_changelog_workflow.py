@@ -147,6 +147,10 @@ class TestChangelogWorkflow(unittest.TestCase):
         # chore line in the body, not on line 1).
         self.assertNotIn("| head -n1 | sed -n", text)
 
+    @unittest.skipIf(
+        os.name == "nt",
+        "replays the workflow's sed|head pipeline; POSIX tools absent on Windows",
+    )
     def test_tag_release_workflow_version_extraction(self) -> None:
         """VERSION sed must match direct and merge-commit message shapes."""
         text = _tag_release_workflow_text()

@@ -14,6 +14,7 @@ from unittest import mock
 import last30days as cli
 import store
 from lib import corpus, env, health, html_render, library, library_index, pipeline, render, schema
+import pytest
 
 
 def _set_mtime(path: Path, value: str) -> None:
@@ -103,6 +104,7 @@ def test_pdf_is_skipped_with_one_note_when_pdftotext_is_absent(tmp_path, monkeyp
     assert result.notes == ["Skipped PDF files because pdftotext is not on PATH"]
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX mode-bit semantics; chmod is a no-op on Windows (NTFS ACLs)")
 def test_mtime_cache_reuses_text_and_is_private(tmp_path, monkeypatch):
     note = tmp_path / "mcp.md"
     note.write_text("MCP servers cache this local note", encoding="utf-8")
@@ -387,6 +389,7 @@ def test_corpus_findings_persist_with_stable_opaque_keys(tmp_path, monkeypatch):
     ) == []
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX mode-bit semantics; chmod is a no-op on Windows (NTFS ACLs)")
 def test_persist_report_hardens_corpus_store_and_sidecars(tmp_path, monkeypatch):
     db_path = tmp_path / "store" / "research.db"
     monkeypatch.setattr(store, "_db_override", db_path)
@@ -541,6 +544,7 @@ def test_configured_corpus_bypasses_hosted_backend(tmp_path, monkeypatch):
     hosted.assert_not_called()
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX mode-bit semantics; chmod is a no-op on Windows (NTFS ACLs)")
 def test_library_publish_strips_marked_corpus_but_local_page_keeps_it(tmp_path, monkeypatch):
     markdown = render.render_full(_privacy_report())
     (tmp_path / "mcp-raw.md").write_text(markdown, encoding="utf-8")
@@ -679,6 +683,7 @@ def test_library_renderer_private_switch_is_load_bearing(tmp_path):
     )
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX mode-bit semantics; chmod is a no-op on Windows (NTFS ACLs)")
 def test_report_cache_with_corpus_is_written_private(tmp_path, monkeypatch):
     config_dir = tmp_path / "private" / "config"
     monkeypatch.setattr(cli.env, "CONFIG_DIR", config_dir)
@@ -689,6 +694,7 @@ def test_report_cache_with_corpus_is_written_private(tmp_path, monkeypatch):
     assert config_dir.stat().st_mode & 0o777 == 0o700
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX mode-bit semantics; chmod is a no-op on Windows (NTFS ACLs)")
 def test_every_corpus_bearing_saved_artifact_is_owner_only(tmp_path):
     report = _privacy_report()
     markdown_dir = tmp_path / "private" / "markdown"
@@ -729,6 +735,7 @@ def test_every_corpus_bearing_saved_artifact_is_owner_only(tmp_path):
         assert directory.stat().st_mode & 0o777 == 0o700
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX mode-bit semantics; chmod is a no-op on Windows (NTFS ACLs)")
 def test_cli_saves_every_corpus_bearing_format_owner_only(tmp_path, monkeypatch):
     report = _privacy_report()
     monkeypatch.setattr(cli.env, "get_config", lambda **_kwargs: {})

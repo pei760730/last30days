@@ -45,7 +45,10 @@ def search_record(**over):
 
 
 def review_record(days_ago: int, rating: int, **over):
-    posted = (TODAY - timedelta(days=days_ago)).strftime("%B %-d, %Y")
+    # %-d is glibc-only (ValueError on Windows strftime); build the
+    # no-leading-zero day portably instead.
+    when = TODAY - timedelta(days=days_ago)
+    posted = f"{when:%B} {when.day}, {when.year}"
     base = {
         "review_id": f"R{days_ago}{rating}",
         # Live shape: the date is doubled and prose-wrapped.

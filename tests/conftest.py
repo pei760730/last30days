@@ -5,6 +5,9 @@ from unittest import mock
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "skills" / "last30days" / "scripts"))
+# tests/ itself, so shared test helpers (tests/_bash_compat.py) import the same
+# way regardless of pytest's import mode.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 
 @pytest.fixture(autouse=True)
