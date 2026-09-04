@@ -566,7 +566,6 @@ class CliV3Tests(unittest.TestCase):
             self.assertIn("## All Items by Source", content)
             self.assertNotIn("## All Items by Source", result.stdout)
 
-    @unittest.skipIf(os.name == "nt", "unaudited-on-Windows: lib/pipeline.py keeps the .last30days-library.db sqlite handle open, so TemporaryDirectory cleanup hits WinError 32; possible real product leak worth a follow-up on POSIX too")
     def test_save_output_uses_unique_dated_fallback(self):
         report = self.make_report()
         with tempfile.TemporaryDirectory() as tmp:
@@ -584,7 +583,6 @@ class CliV3Tests(unittest.TestCase):
             self.assertEqual("dated content", dated.read_text(encoding="utf-8"))
             self.assertTrue(saved.exists())
 
-    @unittest.skipIf(os.name == "nt", "unaudited-on-Windows: lib/pipeline.py keeps the .last30days-library.db sqlite handle open, so TemporaryDirectory cleanup hits WinError 32; possible real product leak worth a follow-up on POSIX too")
     def test_save_output_render_fn_footer_names_actual_collision_path(self):
         from lib import render as render_module
 
@@ -624,7 +622,6 @@ class CliV3Tests(unittest.TestCase):
 
             self.assertEqual([], list(save_dir.iterdir()))
 
-    @unittest.skipIf(os.name == "nt", "unaudited-on-Windows: lib/pipeline.py keeps the .last30days-library.db sqlite handle open, so TemporaryDirectory cleanup hits WinError 32; possible real product leak worth a follow-up on POSIX too")
     def test_render_save_and_print_uses_actual_collision_path_in_file_and_stdout(self):
         report = self.make_report(topic="Collision Topic")
         with tempfile.TemporaryDirectory() as tmp:
@@ -664,7 +661,6 @@ class CliV3Tests(unittest.TestCase):
             self.assertEqual("base content", base.read_text(encoding="utf-8"))
             self.assertEqual("dated content", dated.read_text(encoding="utf-8"))
 
-    @unittest.skipIf(os.name == "nt", "unaudited-on-Windows: lib/pipeline.py keeps the .last30days-library.db sqlite handle open, so TemporaryDirectory cleanup hits WinError 32; possible real product leak worth a follow-up on POSIX too")
     def test_save_output_writes_utf8_encoded_markdown(self):
         report = self.make_report()
         with tempfile.TemporaryDirectory() as tmp:

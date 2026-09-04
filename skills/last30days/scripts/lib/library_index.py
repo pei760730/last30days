@@ -6,6 +6,8 @@ import hashlib
 import os
 import re
 import sqlite3
+from contextlib import closing, contextmanager
+from collections.abc import Iterator
 from dataclasses import dataclass, replace
 from datetime import date
 from pathlib import Path
@@ -91,7 +93,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS library_fts USING fts5(
 
 def fts5_available() -> bool:
     try:
-        with sqlite3.connect(":memory:") as conn:
+        with closing(sqlite3.connect(":memory:")) as conn, conn:
             conn.execute("CREATE VIRTUAL TABLE probe USING fts5(value)")
     except sqlite3.DatabaseError:
         return False
@@ -256,7 +258,15 @@ def _sync_library(
     )
 
 
-def _connect(path: Path) -> sqlite3.Connection:
+@contextmanager
+def _connect(path: Path) -> Iterator[sqlite3.Connection]:
+    """Open the index DB, commit/roll back like ``with conn:``, then always close.
+
+    ``with sqlite3.connect(...) as conn`` only ends the transaction — it leaves
+    the handle open until the GC gets to it. That kept ``.last30days-library.db``
+    locked after a run: on Windows the caller's TemporaryDirectory cleanup then
+    failed with WinError 32, and on POSIX it was a quiet fd leak.
+    """
     _ensure_private_directory(path.parent)
     if not path.exists():
         try:
@@ -274,7 +284,11 @@ def _connect(path: Path) -> sqlite3.Connection:
     except Exception:
         conn.close()
         raise
-    return conn
+    try:
+        with conn:
+            yield conn
+    finally:
+        conn.close()
 
 
 def _upsert_entry(
@@ -343,7 +357,7 @@ def _search_store_sightings(
     if not store_db_path.is_file():
         return []
     try:
-        with sqlite3.connect(str(store_db_path)) as conn:
+        with closing(sqlite3.connect(str(store_db_path))) as conn, conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
                 """SELECT t.name AS topic, rr.run_date,

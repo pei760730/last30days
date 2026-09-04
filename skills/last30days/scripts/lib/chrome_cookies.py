@@ -248,6 +248,7 @@ def _extract_chromium_cookies_macos(
             import os
             os.close(tmp_fd)
 
+    conn = None
     try:
         conn = sqlite3.connect(tmp_path)
         cursor = conn.cursor()
@@ -297,8 +298,6 @@ def _extract_chromium_cookies_macos(
             elif encrypted_value:
                 logger.debug("Unknown encryption for cookie %s (prefix: %r)", name, encrypted_value[:3])
 
-        conn.close()
-
         if not results:
             logger.info("No matching cookies found in %s for domain %s", keychain_service, domain)
             return None
@@ -312,6 +311,13 @@ def _extract_chromium_cookies_macos(
         logger.info("Unexpected error reading %s cookies: %s", keychain_service, e)
         return None
     finally:
+        # 先關連線再刪暫存檔:Windows 上還開著 handle 的檔案刪不掉(WinError 32),
+        # 而這個暫存檔裝的是解出來的 cookie,不能留在磁碟上。
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
         try:
             Path(tmp_path).unlink(missing_ok=True)
         except Exception:
