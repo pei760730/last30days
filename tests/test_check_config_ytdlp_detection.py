@@ -16,13 +16,12 @@ from __future__ import annotations
 import json
 import os
 import re
-import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
 
-from _bash_compat import NO_USABLE_BASH, first_usable_bash
+from _bash_compat import NO_USABLE_BASH, first_usable_bash, hook_path, path_without
 
 HOOK = Path(__file__).resolve().parents[1] / "hooks" / "scripts" / "check-config.sh"
 
@@ -61,21 +60,54 @@ def _run_hook(env_overrides: dict[str, str], path_override: str | None = None) -
     )
 
 
+HOOK_TOOLS = ("cat", "id", "mkdir", "sed", "stat", "tr", "uname")
+
+
+def _resolves(name: str, path: str) -> bool:
+    """Does a shell find ``name`` on this PATH?
+
+    The hook decides with ``command -v``, so the test must ask the same way.
+    ``shutil.which`` is not equivalent on Windows: it only accepts names
+    matching PATHEXT, so an extension-less fake yt-dlp — exactly what these
+    tests plant — is invisible to it while bash resolves it fine.
+    """
+    bash_path = first_usable_bash()
+    if bash_path is None:
+        pytest.skip(NO_USABLE_BASH)
+    env = os.environ.copy()
+    env["PATH"] = path
+    probe = subprocess.run(
+        [bash_path, "-c", f"command -v {name}"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        env=env,
+        timeout=30,
+    )
+    return probe.returncode == 0 and bool(probe.stdout.strip())
+
+
 def _tool_path_without_ytdlp(tmp_path: Path) -> str:
-    """Build a tiny PATH with hook dependencies but no yt-dlp."""
-    tool_bin = tmp_path / "tool_bin"
-    tool_bin.mkdir(exist_ok=True)
-    for name in ("cat", "id", "mkdir", "python3", "sed", "stat", "tr", "uname"):
-        target = shutil.which(name)
-        if target is None:
-            if name == "python3":
-                continue
+    """A PATH that keeps the hook's dependencies but drops yt-dlp.
+
+    Previously this built a sandbox directory of symlinks to the real tools.
+    That cannot work on Windows twice over: ``os.symlink`` needs
+    SeCreateSymbolicLinkPrivilege (WinError 1314 without Developer Mode), and
+    copying is no substitute because the Git-for-Windows binaries load
+    ``msys-2.0.dll`` from their own directory.
+
+    Removing the directories that provide yt-dlp keeps every other tool exactly
+    where it already works, on every platform. ``python3`` is re-added through
+    the shared shim — see ``_bash_compat.python3_shim_dir``.
+    """
+    path = hook_path(base=path_without("yt-dlp"))
+    if _resolves("yt-dlp", path):
+        pytest.skip("yt-dlp still resolves after filtering it off PATH")
+    for name in HOOK_TOOLS:
+        if not _resolves(name, path):
             pytest.skip(f"{name} not on PATH")
-        link = tool_bin / name
-        if not link.exists():
-            link.symlink_to(target)
-    assert shutil.which("yt-dlp", path=str(tool_bin)) is None
-    return str(tool_bin)
+    return path
 
 
 def _write_fake_last_run(tmp_path: Path) -> str:
@@ -122,8 +154,8 @@ def test_new_user_with_ytdlp_says_youtube_works(tmp_path: Path):
 
     # PATH must contain bash (so the hook can run) AND the fake yt-dlp dir.
     # Putting fake_bin FIRST means any real yt-dlp elsewhere is shadowed.
-    path = f"{fake_bin}:{_tool_path_without_ytdlp(tmp_path)}"
-    assert shutil.which("yt-dlp", path=path) is not None, (
+    path = hook_path(str(fake_bin), base=path_without("yt-dlp"))
+    assert _resolves("yt-dlp", path), (
         "test pre-condition: fake yt-dlp should resolve on the override PATH"
     )
 
@@ -150,7 +182,7 @@ def test_new_user_with_ytdlp_says_youtube_works(tmp_path: Path):
 def test_new_user_without_ytdlp_unchanged_welcome(tmp_path: Path):
     """A new user without yt-dlp should see the original wizard-unlock copy."""
     path = _tool_path_without_ytdlp(tmp_path)
-    assert shutil.which("yt-dlp", path=path) is None, (
+    assert not _resolves("yt-dlp", path), (
         "test pre-condition: yt-dlp should not resolve on the minimal PATH"
     )
 
@@ -185,18 +217,18 @@ def test_setup_done_user_source_count_includes_ytdlp(tmp_path: Path):
     fake_bin.mkdir()
     (fake_bin / "yt-dlp").touch()
     (fake_bin / "yt-dlp").chmod(0o755)
-    path_with = f"{fake_bin}:{_tool_path_without_ytdlp(tmp_path)}"
-    assert shutil.which("yt-dlp", path=path_with) is not None
+    path_with = hook_path(str(fake_bin), base=path_without("yt-dlp"))
+    assert _resolves("yt-dlp", path_with)
 
     with_yt = _run_hook(base_env, path_override=path_with)
     assert with_yt.returncode == 0, f"hook failed: stderr={with_yt.stderr!r}"
     count_with = _parse_source_count(with_yt.stdout)
 
     # 2) Run WITHOUT yt-dlp (minimal PATH)
-    path_without = _tool_path_without_ytdlp(tmp_path)
-    assert shutil.which("yt-dlp", path=path_without) is None
+    path_without_ytdlp = _tool_path_without_ytdlp(tmp_path)
+    assert not _resolves("yt-dlp", path_without_ytdlp)
 
-    without_yt = _run_hook(base_env, path_override=path_without)
+    without_yt = _run_hook(base_env, path_override=path_without_ytdlp)
     assert without_yt.returncode == 0, f"hook failed: stderr={without_yt.stderr!r}"
     count_without = _parse_source_count(without_yt.stdout)
 
@@ -210,43 +242,50 @@ def test_setup_done_user_source_count_includes_ytdlp(tmp_path: Path):
 
 
 def test_keychain_credentials_avoid_new_user_welcome(tmp_path: Path):
-    """macOS Keychain credentials should count as configured for the status hook."""
-    fake_bin = tmp_path / "fake_bin_keychain"
-    fake_bin.mkdir()
+    """macOS Keychain credentials should count as configured for the status hook.
 
-    uname = fake_bin / "uname"
-    uname.write_text("#!/bin/sh\necho Darwin\n", encoding="utf-8")
-    uname.chmod(0o755)
-
-    security = fake_bin / "security"
-    security.write_text(
-        """#!/bin/sh
-service=""
-while [ "$#" -gt 0 ]; do
-  if [ "$1" = "-s" ]; then
-    service="$2"
-    shift 2
-  else
-    shift
-  fi
-done
-case "$service" in
-  last30days-XAI_API_KEY|last30days-SCRAPECREATORS_API_KEY) exit 0 ;;
-  *) exit 44 ;;
-esac
+    ``uname`` and ``security`` are shadowed with bash functions via ``BASH_ENV``
+    rather than with fake binaries on PATH. Git Bash prepends its own
+    ``/mingw64/bin:/usr/bin`` to whatever PATH it is handed, so ``/usr/bin/uname``
+    wins on Windows no matter how the test orders the directories — verified with
+    ``type -a uname``, which lists the real one first and the planted one second.
+    A function is resolved before any file on every platform, so this runs the
+    same way everywhere.
+    """
+    shadow = tmp_path / "shadow_darwin.sh"
+    shadow.write_text(
+        """uname() { echo Darwin; }
+security() {
+  service=""
+  while [ "$#" -gt 0 ]; do
+    if [ "$1" = "-s" ]; then
+      service="$2"
+      shift 2
+    else
+      shift
+    fi
+  done
+  case "$service" in
+    last30days-XAI_API_KEY|last30days-SCRAPECREATORS_API_KEY) return 0 ;;
+    *) return 44 ;;
+  esac
+}
 """,
         encoding="utf-8",
+        # LF: a CRLF shebang/body makes bash exec "/bin/sh\r".
+        newline="\n",
     )
-    security.chmod(0o755)
 
     cfg_dir = _write_fake_last_run(tmp_path)
-    path = f"{fake_bin}:{_tool_path_without_ytdlp(tmp_path)}"
     result = _run_hook(
         {
             "HOME": str(tmp_path),
             "LAST30DAYS_CONFIG_DIR": cfg_dir,
+            # bash sources BASH_ENV for non-interactive shells, which is exactly
+            # what `bash check-config.sh` is.
+            "BASH_ENV": str(shadow).replace("\\", "/"),
         },
-        path_override=path,
+        path_override=_tool_path_without_ytdlp(tmp_path),
     )
 
     assert result.returncode == 0, f"hook failed: stderr={result.stderr!r}"
