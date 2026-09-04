@@ -13,6 +13,7 @@ permissions: {}
 jobs:
   tag:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     # Only act on the release-prep commit shape produced by prepare-release.yml
     # (or an equivalent manual chore(release) commit). Quote the expression —
     # a bare `chore(release):` colon is invalid YAML and fails the whole
