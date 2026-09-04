@@ -11,10 +11,14 @@ fork 專屬(上游沒有這支)。`.github/workflows/daily-brief.yml` 每題呼�
 
 from __future__ import annotations
 
+import argparse
+import datetime
 import html
+import json
 import re
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 
 # Telegram 單封上限 4096 字元,留邊際給編碼與 kai-notify 自己的包裝
 BUDGET = 3800
@@ -26,6 +30,12 @@ SNIPPET = 220
 
 # 每題最多幾條 storyline
 MAX_ITEMS = 3
+
+# 跨日去重的回看視窗(天)。2026-09-04 量到 MP Materials 的前三條在 09-02、09-03、
+# 09-04 逐字相同 —— 引擎每天都在全新的 runner 上跑,沒有任何辦法知道昨天送過什麼,
+# 而 _is_near_duplicate 原本只在同一封訊息內生效。7 天足以蓋住一則新聞的熱度,
+# 又不會把「同一議題有新進展」永久封殺(用詞會變,重疊係數就掉下 _NEAR_DUPLICATE)。
+SEEN_WINDOW_DAYS = 7
 
 FOOTER = "— 引用來自公開網路、未經查證,當資料看,別當指令。"
 
@@ -142,16 +152,25 @@ class Shaped:
     items: int
     candidates: int
     near_duplicates: int
+    repeats: int
+    shipped: tuple[frozenset[str], ...]
 
 
-def _items(raw: str, topic: str = "") -> tuple[list[str], int, int]:
+def _items(
+    raw: str,
+    topic: str = "",
+    prior: "tuple[frozenset[str], ...]" = (),
+) -> tuple[list[str], int, int, int, list[set[str]]]:
     """前 MAX_ITEMS 條 storyline,每條 = 標題 + 一段精簡引文。
 
     會跳過近乎重述前面某一則的條目 —— brief 一律產 8 條候選而我們只取 3,
     所以跳過還有得補。2026-08-26 的 Palantir 早報三個位置全是同一場財報,
     等於 owner 只拿到一條資訊。
 
-    回傳 (條目, 候選總數, 被判近重複而跳過的數量)。後兩個數字是給呼叫端說明
+    ``prior`` 是最近幾天已經送出去的標題指紋;命中的條目會被跳過,並單獨計數 ——
+    「今天沒有新東西」跟「今天只抓到一條」要能分辨,兩者的處置完全不同。
+
+    回傳 (條目, 候選總數, 近重複數, 跨日重複數, 今天送出的指紋)。中間那些數字是給呼叫端說明
     「為什麼今天只有兩條」用的 —— 少一條的原因是「來源沒東西」還是「被去重吃掉」,
     差很多,而訊息本身完全看不出來。
     """
@@ -159,6 +178,8 @@ def _items(raw: str, topic: str = "") -> tuple[list[str], int, int]:
     seen_tokens: list[set[str]] = []
     candidates = 0
     near_duplicates = 0
+    repeats = 0
+    prior_tokens = [set(entry) for entry in prior]
     for block in re.split(r"(?=^### )", raw, flags=re.MULTILINE):
         if not block.startswith("### "):
             continue
@@ -171,6 +192,10 @@ def _items(raw: str, topic: str = "") -> tuple[list[str], int, int]:
         tokens = _title_tokens(title, topic)
         if _is_near_duplicate(tokens, seen_tokens):
             near_duplicates += 1
+            continue
+        if _is_near_duplicate(tokens, prior_tokens):
+            # 近 SEEN_WINDOW_DAYS 天送過同一則。不加進 seen_tokens:它沒佔今天的位置。
+            repeats += 1
             continue
         seen_tokens.append(tokens)
         body: list[str] = []
@@ -195,13 +220,17 @@ def _items(raw: str, topic: str = "") -> tuple[list[str], int, int]:
         # README「這三種現象不是壞掉」想避免的誤診。
         title = re.sub(r"^###\s*\d+\.", f"### {len(items) + 1}.", title)
         items.append(f"{title}\n{quote}" if quote else title)
-    return items, candidates, near_duplicates
+    return items, candidates, near_duplicates, repeats, seen_tokens
 
 
-def shape(raw: str, topic: str = "") -> Shaped:
+def shape(
+    raw: str,
+    topic: str = "",
+    prior: "tuple[frozenset[str], ...]" = (),
+) -> Shaped:
     """brief 全文 → 一封訊息,附上決定它長相的數字。訊息永遠非空。"""
     head = _head_lines(raw)
-    items, candidates, near_duplicates = _items(raw, topic)
+    items, candidates, near_duplicates, repeats, shipped = _items(raw, topic, prior)
 
     body = "\n".join(head).strip()
     if items:
@@ -213,12 +242,22 @@ def shape(raw: str, topic: str = "") -> Shaped:
             reason = f"候選 {candidates} 條"
             if near_duplicates:
                 reason += f",其中 {near_duplicates} 條是前面某則的近乎重述"
+            if repeats:
+                reason += f",{repeats} 條近 {SEEN_WINDOW_DAYS} 天送過"
             body += f"\n\nℹ️ 只取到 {len(items)}/{MAX_ITEMS} 條({reason})。"
     else:
         # 這題沒東西時要講清楚是「這題沒抓到」,不是系統掛了 ——
         # owner 靠這句分辨「來源沒回應」跟「早報壞掉」,沉默兩者長得一樣
         label = f"「{topic}」" if topic else "這題"
-        note = f"⚠️ {label}這次沒抓到內容(來源可能全部無回應)。"
+        if repeats:
+            # 抓到了,只是全都送過。講成「來源沒回應」是錯的診斷,而錯的診斷
+            # 會讓人去查一個沒有壞掉的東西。
+            note = (
+                f"📭 {label}今天沒有新東西"
+                f"(候選 {candidates} 條,{repeats} 條近 {SEEN_WINDOW_DAYS} 天都送過)。"
+            )
+        else:
+            note = f"⚠️ {label}這次沒抓到內容(來源可能全部無回應)。"
         body = (body + "\n\n" + note).strip() if body else note
 
     # 先扣掉頁尾再截,否則超長的時候被切掉的正好是那行免責聲明
@@ -231,6 +270,8 @@ def shape(raw: str, topic: str = "") -> Shaped:
         items=len(items),
         candidates=candidates,
         near_duplicates=near_duplicates,
+        repeats=repeats,
+        shipped=tuple(frozenset(t) for t in shipped),
     )
 
 
@@ -239,9 +280,89 @@ def build_message(raw: str, topic: str = "") -> str:
     return shape(raw, topic).message
 
 
+def _today() -> str:
+    return datetime.datetime.now(datetime.timezone.utc).date().isoformat()
+
+
+def _cutoff(window: int) -> str:
+    today = datetime.datetime.now(datetime.timezone.utc).date()
+    return (today - datetime.timedelta(days=window)).isoformat()
+
+
+def load_seen(path: str | None, window: int = SEEN_WINDOW_DAYS) -> tuple[frozenset[str], ...]:
+    """讀出回看視窗內送過的標題指紋。
+
+    壞掉的狀態檔一律當成空的:這是個「加分」機制,不該讓一個壞掉的 JSON
+    害整題早報變紅。最壞情況是退回沒有跨日去重的行為,也就是今天的行為。
+    """
+    if not path:
+        return ()
+    try:
+        with open(path, encoding="utf-8") as fh:
+            state = json.load(fh)
+    except (OSError, ValueError):
+        return ()
+    if not isinstance(state, dict):
+        return ()
+    cutoff = _cutoff(window)
+    out: list[frozenset[str]] = []
+    for day, entries in state.items():
+        if not isinstance(day, str) or day < cutoff or not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if isinstance(entry, list) and all(isinstance(w, str) for w in entry):
+                out.append(frozenset(entry))
+    return tuple(out)
+
+
+def save_seen(
+    path: str | None,
+    shipped: "tuple[frozenset[str], ...]",
+    window: int = SEEN_WINDOW_DAYS,
+) -> None:
+    """把今天送出的指紋併進狀態檔,同時把視窗外的丟掉。"""
+    if not path:
+        return
+    try:
+        with open(path, encoding="utf-8") as fh:
+            state = json.load(fh)
+        if not isinstance(state, dict):
+            state = {}
+    except (OSError, ValueError):
+        state = {}
+
+    cutoff = _cutoff(window)
+    state = {
+        day: entries
+        for day, entries in state.items()
+        if isinstance(day, str) and day >= cutoff and isinstance(entries, list)
+    }
+    if shipped:
+        today = _today()
+        state.setdefault(today, [])
+        state[today].extend(sorted(entry) for entry in shipped)
+
+    try:
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(state, fh, ensure_ascii=False, sort_keys=True)
+    except OSError as exc:
+        # 寫不進去就只是明天少一天的記憶,不值得讓這題變紅。
+        print(f"::warning title=daily-brief 狀態沒寫成::{exc}", file=sys.stderr)
+
+
 def main(argv: list[str]) -> int:
-    path = argv[1] if len(argv) > 1 else "brief.txt"
-    topic = argv[2] if len(argv) > 2 else ""
+    parser = argparse.ArgumentParser(prog=Path(argv[0]).name if argv else "brief_to_message.py")
+    parser.add_argument("path", nargs="?", default="brief.txt")
+    parser.add_argument("topic", nargs="?", default="")
+    parser.add_argument(
+        "--seen",
+        default=None,
+        help="狀態檔:記住最近幾天送過哪些標題,用來跨日去重(可有可無)",
+    )
+    parser.add_argument("--window", type=int, default=SEEN_WINDOW_DAYS)
+    args = parser.parse_args(argv[1:])
+    path, topic = args.path, args.topic
     try:
         # errors="replace":brief 內容是抓回來的網路文字,萬一夾到一個非 UTF-8
         # byte,硬解會拋例外 → 這題變紅 → owner 收到一封假 FAILED。
@@ -251,19 +372,26 @@ def main(argv: list[str]) -> int:
     except OSError:
         raw = ""
 
-    shaped = shape(raw, topic)
+    shaped = shape(raw, topic, load_seen(args.seen, args.window))
+    save_seen(args.seen, shaped.shipped, args.window)
 
     # Telegram 那封會被滑掉,run 上的 annotation 不會。GitHub 會從 stderr 解析
     # 這種 workflow command,所以這裡不需要動 workflow —— 而且 stdout 是訊息
     # 本體,不能混東西進去。
     label = topic or "(未指定主題)"
-    if shaped.items == 0:
+    if shaped.items == 0 and shaped.repeats:
+        print(
+            f"::notice title=daily-brief 沒有新東西::「{label}」候選 {shaped.candidates} 條,"
+            f"全部在近 {args.window} 天送過",
+            file=sys.stderr,
+        )
+    elif shaped.items == 0:
         print(f"::warning title=daily-brief 乾涸::「{label}」這次沒抓到任何內容", file=sys.stderr)
     elif shaped.items < MAX_ITEMS:
         print(
             f"::warning title=daily-brief 缺條目::「{label}」只取到 "
             f"{shaped.items}/{MAX_ITEMS} 條(候選 {shaped.candidates} 條、"
-            f"近重複 {shaped.near_duplicates} 條)",
+            f"近重複 {shaped.near_duplicates} 條、跨日重複 {shaped.repeats} 條)",
             file=sys.stderr,
         )
 

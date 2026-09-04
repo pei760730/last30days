@@ -93,3 +93,23 @@ def test_daily_brief_still_runs_at_0700_taipei() -> None:
     triggers = workflow.get("on") or workflow.get(True)
     crons = [entry["cron"] for entry in triggers["schedule"]]
     assert crons == ["0 23 * * *"], f"daily-brief schedule changed: {crons}"
+
+
+def test_seen_state_is_saved_only_after_a_successful_push() -> None:
+    """The dedupe memory must not advance when the Telegram push failed.
+
+    Recording a storyline as "sent" on a run whose push failed means tomorrow
+    suppresses it — the owner never sees that content at all. So the save step
+    has to sit AFTER the push and carry no `if:` (bare `success()`); an
+    `always()` here would quietly trade a retry for permanent loss.
+    """
+    steps = _load(WORKFLOW_DIR / "daily-brief.yml")["jobs"]["brief"]["steps"]
+    names = [step.get("name", "") for step in steps]
+    push = names.index("Push brief to Telegram (kai-notify, fail-soft)")
+    save = names.index("Save seen storylines")
+
+    assert save > push, "the seen-state save must run after the push, not before"
+    assert "if" not in steps[save], (
+        "the save step must keep the default success() condition — an always() "
+        "would record storylines as sent on a run that never delivered them."
+    )

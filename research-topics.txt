@@ -4,8 +4,11 @@
 # ── 主題後面可以接該題專屬的 CLI flags(一個空格 + `--` 開頭),只影響那一題:
 #      men's fashion trends --search reddit,tiktok,instagram
 #    最常用的是 --search(逗號分隔的來源白名單),用來擋掉會污染該題的來源。
+#    其次是 --register(受眾預設):exec 加權 polymarket/grounding,creator 加權
+#    tiktok/instagram/reddit,dev 加權 github/hackernews。只有在白名單裡的來源
+#    才吃得到加權,不在白名單的權重是空轉。
 #    白名單裡沒設定 key 的來源會自動 no-op,不會壞。
 # ── 這份由 AI 幫你維護,你在對話裡說「加/換主題」我就改,你不用開檔。
-men's fashion trends --search reddit,tiktok,instagram,grounding
-Palantir PLTR --search reddit,hackernews,polymarket,grounding
-MP Materials rare earth --search reddit,hackernews,polymarket,grounding
+men's fashion trends --search reddit,tiktok,instagram,grounding --register creator
+Palantir PLTR --search reddit,hackernews,polymarket,grounding --register exec
+MP Materials rare earth --search reddit,hackernews,polymarket,grounding --register exec
