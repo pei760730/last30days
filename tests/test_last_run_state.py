@@ -9,7 +9,7 @@ import sys
 import tempfile
 import unittest
 
-from _bash_compat import NO_USABLE_BASH, first_usable_bash
+from _bash_compat import NO_USABLE_BASH, first_usable_bash, hook_path
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest import mock
@@ -29,6 +29,20 @@ def _require_bash() -> str:
     if bash is None:
         raise unittest.SkipTest(NO_USABLE_BASH)
     return bash
+
+
+def _hook_env() -> dict[str, str]:
+    """Environment for shelling out, with a python3 that actually runs.
+
+    check-config.sh gates its "Last run:" line on `command -v python3`. On
+    Windows that resolves to the App Execution Alias stub in WindowsApps, which
+    prints nothing and exits 0 when Python was not installed from the Store —
+    so the guard passes, the interpreter no-ops, and the line silently vanishes.
+    hook_path() puts a real python3 in front of it.
+    """
+    env = os.environ.copy()
+    env["PATH"] = hook_path()
+    return env
 
 
 def run_last30days(topic: str, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
@@ -92,7 +106,7 @@ class LastRunStateTests(unittest.TestCase):
     def test_empty_config_override_disables_last_run_write(self):
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp) / "home"
-            env = os.environ.copy()
+            env = _hook_env()
             env["HOME"] = str(home)
             env["LAST30DAYS_CONFIG_DIR"] = ""
 
@@ -104,7 +118,7 @@ class LastRunStateTests(unittest.TestCase):
     def test_custom_config_override_writes_last_run_to_custom_dir(self):
         with tempfile.TemporaryDirectory() as tmp:
             config_dir = Path(tmp) / "custom-config"
-            env = os.environ.copy()
+            env = _hook_env()
             env["HOME"] = str(Path(tmp) / "home")
             env["LAST30DAYS_CONFIG_DIR"] = str(config_dir)
 
@@ -352,7 +366,7 @@ class LastRunStateTests(unittest.TestCase):
                     }
                 )
             )
-            env = os.environ.copy()
+            env = _hook_env()
             env["HOME"] = str(Path(tmp) / "home")
             env["LAST30DAYS_CONFIG_DIR"] = str(config_dir)
 
@@ -373,7 +387,7 @@ class LastRunStateTests(unittest.TestCase):
     def test_hook_exits_0_when_no_last_run(self):
         """Script exits 0 when ScrapeCreators configured but no prior run (last-run.json absent)."""
         with tempfile.TemporaryDirectory() as tmp:
-            env = os.environ.copy()
+            env = _hook_env()
             env["HOME"] = str(Path(tmp) / "home")
             env["SETUP_COMPLETE"] = "true"
             env["ENV_SCRAPECREATORS_API_KEY"] = "sk-test"
@@ -406,7 +420,7 @@ class LastRunStateTests(unittest.TestCase):
                 "AUTH_TOKEN=test-auth\n"
                 "CT0=test-ct0\n"
             )
-            env = os.environ.copy()
+            env = _hook_env()
             env["HOME"] = str(home)
 
             result = subprocess.run(
@@ -431,7 +445,7 @@ class LastRunStateTests(unittest.TestCase):
         return int(match.group(1))
 
     def _run_hook(self, tmp: str, env_overrides: dict[str, str]) -> subprocess.CompletedProcess[str]:
-        env = os.environ.copy()
+        env = _hook_env()
         env["HOME"] = str(Path(tmp) / "home")
         env["SETUP_COMPLETE"] = "true"
         # Strip credentials that could bleed in from the test-runner environment
@@ -504,7 +518,7 @@ class LastRunStateTests(unittest.TestCase):
                     }
                 )
             )
-            env = os.environ.copy()
+            env = _hook_env()
             env["HOME"] = str(Path(tmp) / "home")
             env["SETUP_COMPLETE"] = "true"
             env["ENV_SCRAPECREATORS_API_KEY"] = "sk-test"
@@ -572,7 +586,7 @@ class TestCheckPermsAutoFix(unittest.TestCase):
             env_file.write_text("SETUP_COMPLETE=true\n")
             os.chmod(env_file, 0o644)
 
-            env = os.environ.copy()
+            env = _hook_env()
             env["HOME"] = str(Path(tmp))
             env["LAST30DAYS_CONFIG_DIR"] = str(config_dir)
 

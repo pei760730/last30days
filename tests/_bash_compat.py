@@ -19,6 +19,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 from functools import lru_cache
 from pathlib import Path
@@ -84,3 +85,64 @@ def usable_bash_binaries() -> tuple[str, ...]:
 def first_usable_bash() -> str | None:
     binaries = usable_bash_binaries()
     return binaries[0] if binaries else None
+
+
+# ── PATH the hook tests need ────────────────────────────────────────────────
+# check-config.sh guards its last-run block with `command -v python3`. On this
+# owner's Windows machine that resolves to the App Execution Alias stub at
+# %LOCALAPPDATA%\Microsoft\WindowsApps\python3 — a launcher that prints
+# nothing and exits 0 when Python is not installed from the Store. The guard
+# passes, the interpreter does nothing, LAST_RUN_LINE comes out empty, and the
+# hook's "Last run:" line silently disappears. Verified directly:
+#
+#     $ python3 -c "print(42)"      # via that stub
+#     $                             # no output, rc=0
+#
+# So tests that shell out to the hook must put a python3 that actually runs on
+# PATH. A shim script works everywhere and needs no privileges — unlike a
+# symlink, which raises WinError 1314 without Developer Mode.
+
+
+@lru_cache(maxsize=1)
+def python3_shim_dir() -> str:
+    """A directory whose ``python3`` really is this interpreter.
+
+    Created once per session in a temp dir that outlives the caller (pytest's
+    tmp_path is per-test; this is shared), and left for the OS to reap.
+    """
+    directory = Path(tempfile.mkdtemp(prefix="last30days-python3-shim-"))
+    shim = directory / "python3"
+    # Forward slashes: Git Bash cannot exec a backslash path.
+    shim.write_text(
+        '#!/bin/sh\nexec "{}" "$@"\n'.format(sys.executable.replace("\\", "/")),
+        encoding="utf-8",
+        newline="\n",
+    )
+    shim.chmod(0o755)
+    return str(directory)
+
+
+def _dir_provides(directory: str, tool: str) -> bool:
+    """Would a shell find ``tool`` in this one directory?
+
+    Not ``shutil.which``: on Windows it only accepts names matching PATHEXT, so
+    it cannot see an extension-less executable that bash's ``command -v`` finds
+    perfectly well — and ``command -v`` is what the hook actually uses.
+    """
+    base = Path(directory)
+    return any((base / (tool + ext)).exists() for ext in ("", ".exe", ".cmd", ".bat", ".py"))
+
+
+def path_without(tool: str, *, base: str | None = None) -> str:
+    """The given PATH minus every directory that provides ``tool``."""
+    entries = [e for e in (base if base is not None else os.environ.get("PATH", "")).split(os.pathsep) if e]
+    return os.pathsep.join(e for e in entries if not _dir_provides(e, tool))
+
+
+def hook_path(*prefix: str, base: str | None = None) -> str:
+    """PATH for running check-config.sh: prefixes first, then a real python3."""
+    entries = [*prefix, python3_shim_dir()]
+    tail = base if base is not None else os.environ.get("PATH", "")
+    if tail:
+        entries.append(tail)
+    return os.pathsep.join(entries)
