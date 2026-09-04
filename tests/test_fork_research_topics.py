@@ -23,7 +23,7 @@ TOPICS_FILE = REPO_ROOT / "research-topics.txt"
 
 sys.path.insert(0, str(REPO_ROOT / "skills/last30days/scripts"))
 
-from lib import pipeline  # noqa: E402
+from lib import pipeline, registers  # noqa: E402
 
 # daily-brief.yml only ever runs the first three (`head -3`).
 LIVE_TOPICS = 3
@@ -102,6 +102,27 @@ def test_search_sources_are_real(line: str) -> None:
                 "SystemExit on it, daily-brief.yml swallows that with `|| true`, "
                 "and the topic ships empty every morning."
             )
+
+
+@pytest.mark.parametrize("line", _topic_lines(), ids=lambda line: line[:40])
+def test_register_presets_are_real(line: str) -> None:
+    """An unknown --register dies the same silent death as an unknown source.
+
+    argparse rejects it with exit 2, `|| true` swallows that, and the topic
+    ships empty every morning looking like a source outage.
+    """
+    _, flags = _split(line)
+    for index, flag in enumerate(flags):
+        if flag == "--register":
+            value = flags[index + 1] if index + 1 < len(flags) else ""
+        elif flag.startswith("--register="):
+            value = flag.partition("=")[2]
+        else:
+            continue
+        assert value in registers.REGISTER_NAMES, (
+            f"{line!r}: unknown --register {value!r}; "
+            f"valid presets are {list(registers.REGISTER_NAMES)}"
+        )
 
 
 def test_the_topics_that_actually_run_are_all_scoped() -> None:

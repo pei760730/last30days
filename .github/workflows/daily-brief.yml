@@ -110,6 +110,27 @@ jobs:
         with:
           python-version: "3.12"
 
+      # 狀態檔的 cache key 只綁主題文字,不綁 flags —— 改個 --search 白名單
+      # 不該把這題的記憶清掉。
+      - name: Topic state key
+        id: state
+        env:
+          TOPIC_LINE: ${{ matrix.topic }}
+        run: |
+          set -euo pipefail
+          topic="${TOPIC_LINE%% --*}"
+          printf 'hash=%s\n' "$(printf '%s' "$topic" | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
+
+      # 跨日去重的記憶。restore/save 分開:同名 key 存不進去,所以 key 帶 run_id,
+      # 由 restore-keys 的前綴撈回最近一次那份。
+      - name: Restore seen storylines
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .brief-state
+          key: brief-seen-${{ steps.state.outputs.hash }}-${{ github.run_id }}
+          restore-keys: |
+            brief-seen-${{ steps.state.outputs.hash }}-
+
       - name: Generate brief
         id: gen
         env:
@@ -140,7 +161,11 @@ jobs:
 
           # brief.txt → 一封可讀的 Telegram 訊息(邏輯在 tools/brief_to_message.py,
           # 放檔案而不是塞 python -c:這段有分支有迴圈,inline 會沒法測)
-          python tools/brief_to_message.py brief.txt "$t" > message.md
+          # --seen:記住最近 7 天送過哪些標題。2026-09-04 量到 MP Materials 的
+          # 前三條在 09-02/03/04 逐字相同 —— 每天都是全新 runner,引擎沒有任何
+          # 辦法知道昨天送過什麼。狀態檔壞掉或不存在時就退回原本的行為。
+          python tools/brief_to_message.py brief.txt "$t" \
+            --seen ".brief-state/seen.json" > message.md
 
           {
             # 分隔符隨機化:內容來自外部抓取,固定字串理論上可能被內容撞掉
@@ -159,6 +184,12 @@ jobs:
           KAI_NOTIFY_CHAT_ID: ${{ secrets.KAI_NOTIFY_CHAT_ID }}
         with:
           text: ${{ steps.gen.outputs.text }}
+
+      - name: Save seen storylines
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .brief-state
+          key: brief-seen-${{ steps.state.outputs.hash }}-${{ github.run_id }}
 
       - name: Report failure to Kai (fail-soft)
         if: failure()

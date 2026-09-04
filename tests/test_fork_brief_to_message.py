@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import json
 import importlib.util
 import sys
 from pathlib import Path
@@ -329,3 +330,94 @@ def test_healthy_topic_emits_no_warning(capsys, tmp_path):
     path.write_text(_brief("A one", "B two", "C three"), encoding="utf-8")
     btm.main(["brief_to_message.py", str(path), "Palantir PLTR"])
     assert "::warning" not in capsys.readouterr().err
+
+
+# ── 跨日去重 ────────────────────────────────────────────────────────────────
+# 2026-09-04 量到 MP Materials 的前三條在 09-02/03/04 逐字相同:每天都是全新的
+# runner,引擎沒有任何辦法知道昨天送過什麼。
+
+
+def _fingerprints(*titles: str, topic: str = "Palantir PLTR"):
+    return btm.shape(_brief(*titles), topic).shipped
+
+
+def test_same_brief_twice_ships_nothing_the_second_time():
+    titles = ("Alpha moves first", "Bravo answers", "Charlie waits")
+    prior = _fingerprints(*titles)
+    shaped = btm.shape(_brief(*titles), "Palantir PLTR", prior)
+    assert shaped.items == 0
+    assert shaped.repeats == 3
+    assert "今天沒有新東西" in shaped.message
+
+
+def test_repeat_note_is_not_the_no_sources_note():
+    """『全都送過』跟『來源沒回應』是兩種病,錯的診斷會害人去查沒壞的東西。"""
+    titles = ("Alpha moves first",)
+    shaped = btm.shape(_brief(*titles), "T", _fingerprints(*titles, topic="T"))
+    assert "來源可能全部無回應" not in shaped.message
+    assert "📭" in shaped.message
+
+
+def test_only_the_new_storyline_survives():
+    prior = _fingerprints("Alpha moves first", "Bravo answers")
+    shaped = btm.shape(
+        _brief("Alpha moves first", "Bravo answers", "Delta enters the market"),
+        "Palantir PLTR",
+        prior,
+    )
+    assert shaped.items == 1
+    assert shaped.repeats == 2
+    assert "Delta enters" in shaped.message
+    assert "Alpha moves" not in shaped.message
+    assert f"2 條近 {btm.SEEN_WINDOW_DAYS} 天送過" in shaped.message
+
+
+def test_no_prior_state_behaves_exactly_as_before():
+    titles = ("Alpha moves first", "Bravo answers", "Charlie waits")
+    assert btm.shape(_brief(*titles), "T").message == btm.build_message(_brief(*titles), "T")
+
+
+def test_state_round_trip_and_window_pruning(tmp_path):
+    state = tmp_path / "seen.json"
+    titles = ("Alpha moves first", "Bravo answers", "Charlie waits")
+
+    btm.save_seen(str(state), _fingerprints(*titles))
+    assert len(btm.load_seen(str(state))) == 3
+
+    # 視窗外的那天要被丟掉
+    stale = json.loads(state.read_text(encoding="utf-8"))
+    aged = {"2020-01-01": next(iter(stale.values()))}
+    state.write_text(json.dumps(aged), encoding="utf-8")
+    assert btm.load_seen(str(state)) == ()
+
+
+def test_broken_state_file_is_ignored_not_fatal(tmp_path):
+    """這是加分機制,壞掉的 JSON 不該讓整題早報變紅。"""
+    state = tmp_path / "seen.json"
+    state.write_text("{not json at all", encoding="utf-8")
+    assert btm.load_seen(str(state)) == ()
+
+    titles = ("Alpha moves first",)
+    rc = btm.main(["brief_to_message.py", "/nope.txt", "T", "--seen", str(state)])
+    assert rc == 0
+
+
+def test_missing_state_path_is_fine():
+    assert btm.load_seen(None) == ()
+    btm.save_seen(None, ())
+
+
+def test_cli_writes_and_then_honours_the_state_file(tmp_path, capsys):
+    brief = tmp_path / "brief.txt"
+    brief.write_text(_brief("Alpha moves first", "Bravo answers", "Charlie waits"), encoding="utf-8")
+    state = tmp_path / "seen.json"
+
+    btm.main(["brief_to_message.py", str(brief), "Palantir PLTR", "--seen", str(state)])
+    first = capsys.readouterr()
+    assert "Alpha moves" in first.out
+
+    btm.main(["brief_to_message.py", str(brief), "Palantir PLTR", "--seen", str(state)])
+    second = capsys.readouterr()
+    assert "今天沒有新東西" in second.out
+    assert "Alpha moves" not in second.out
+    assert "::notice" in second.err
