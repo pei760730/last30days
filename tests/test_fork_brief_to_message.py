@@ -269,3 +269,63 @@ def test_kept_items_are_renumbered_contiguously():
         "Palantir PLTR",
     )
     assert [line.split(".")[0] for line in msg.splitlines() if line.startswith("### ")] == ["### 1", "### 2"]
+
+
+# ── 訊息要說出「為什麼今天只有這麼少條」 ──────────────────────────────────
+# 舊版少於三條時就只是少幾條,讀的人分不出「今天新聞少」跟「抓取半殘」。
+
+
+def test_full_message_says_nothing_about_counts():
+    """滿三條是常態,不要在每天的訊息上加噪音。"""
+    msg = btm.build_message(_brief("A one", "B two", "C three"), "Palantir PLTR")
+    assert "只取到" not in msg
+
+
+def test_short_message_reports_candidate_count():
+    msg = btm.build_message(_brief("Only one here"), "Palantir PLTR")
+    assert "只取到 1/3 條" in msg
+    assert "候選 1 條" in msg
+
+
+def test_short_message_blames_deduplication_when_that_is_the_cause():
+    """被去重吃掉跟來源沒東西,是兩種完全不同的病。"""
+    raw = _brief(
+        "Palantir blowout quarter with commercial revenue soaring 150%",
+        "Palantir blowout Q2 earnings, commercial revenue soaring nearly 150%",
+    )
+    shaped = btm.shape(raw, "Palantir PLTR")
+    assert shaped.items == 1
+    assert shaped.candidates == 2
+    assert shaped.near_duplicates == 1
+    assert "近乎重述" in shaped.message
+
+
+def test_candidates_are_counted_past_the_three_that_ship():
+    """取滿之後仍要把候選數點完,否則永遠只會印『候選 3 條』。"""
+    shaped = btm.shape(_brief("A one", "B two", "C three", "D four", "E five"), "T")
+    assert shaped.items == 3
+    assert shaped.candidates == 5
+
+
+def test_dry_topic_emits_actions_warning(capsys):
+    """Telegram 那封會被滑掉,run 上的 annotation 不會。"""
+    btm.main(["brief_to_message.py", "/does/not/exist.txt", "MP Materials rare earth"])
+    err = capsys.readouterr().err
+    assert "::warning" in err
+    assert "MP Materials rare earth" in err
+
+
+def test_short_topic_emits_actions_warning(capsys, tmp_path):
+    path = tmp_path / "brief.txt"
+    path.write_text(_brief("Only one here"), encoding="utf-8")
+    btm.main(["brief_to_message.py", str(path), "Palantir PLTR"])
+    err = capsys.readouterr().err
+    assert "::warning" in err
+    assert "1/3" in err
+
+
+def test_healthy_topic_emits_no_warning(capsys, tmp_path):
+    path = tmp_path / "brief.txt"
+    path.write_text(_brief("A one", "B two", "C three"), encoding="utf-8")
+    btm.main(["brief_to_message.py", str(path), "Palantir PLTR"])
+    assert "::warning" not in capsys.readouterr().err

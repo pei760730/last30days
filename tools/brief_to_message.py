@@ -14,6 +14,7 @@ from __future__ import annotations
 import html
 import re
 import sys
+from dataclasses import dataclass
 
 # Telegram 單封上限 4096 字元,留邊際給編碼與 kai-notify 自己的包裝
 BUDGET = 3800
@@ -133,22 +134,43 @@ def _head_lines(raw: str) -> list[str]:
     return out
 
 
-def _items(raw: str, topic: str = "") -> list[str]:
+@dataclass(frozen=True)
+class Shaped:
+    """一封訊息,加上「它為什麼長這樣」的實際數字。"""
+
+    message: str
+    items: int
+    candidates: int
+    near_duplicates: int
+
+
+def _items(raw: str, topic: str = "") -> tuple[list[str], int, int]:
     """前 MAX_ITEMS 條 storyline,每條 = 標題 + 一段精簡引文。
 
     會跳過近乎重述前面某一則的條目 —— brief 一律產 8 條候選而我們只取 3,
     所以跳過還有得補。2026-08-26 的 Palantir 早報三個位置全是同一場財報,
     等於 owner 只拿到一條資訊。
+
+    回傳 (條目, 候選總數, 被判近重複而跳過的數量)。後兩個數字是給呼叫端說明
+    「為什麼今天只有兩條」用的 —— 少一條的原因是「來源沒東西」還是「被去重吃掉」,
+    差很多,而訊息本身完全看不出來。
     """
     items: list[str] = []
     seen_tokens: list[set[str]] = []
+    candidates = 0
+    near_duplicates = 0
     for block in re.split(r"(?=^### )", raw, flags=re.MULTILINE):
         if not block.startswith("### "):
+            continue
+        candidates += 1
+        if len(items) >= MAX_ITEMS:
+            # 取滿了,剩下的只數不做 —— 候選數要算完整,才講得出「8 條選 3 條」
             continue
         lines = block.splitlines()
         title = lines[0].strip()
         tokens = _title_tokens(title, topic)
         if _is_near_duplicate(tokens, seen_tokens):
+            near_duplicates += 1
             continue
         seen_tokens.append(tokens)
         body: list[str] = []
@@ -173,19 +195,25 @@ def _items(raw: str, topic: str = "") -> list[str]:
         # README「這三種現象不是壞掉」想避免的誤診。
         title = re.sub(r"^###\s*\d+\.", f"### {len(items) + 1}.", title)
         items.append(f"{title}\n{quote}" if quote else title)
-        if len(items) >= MAX_ITEMS:
-            break
-    return items
+    return items, candidates, near_duplicates
 
 
-def build_message(raw: str, topic: str = "") -> str:
-    """brief 全文 → 一封訊息。永遠回傳非空字串。"""
+def shape(raw: str, topic: str = "") -> Shaped:
+    """brief 全文 → 一封訊息,附上決定它長相的數字。訊息永遠非空。"""
     head = _head_lines(raw)
-    items = _items(raw, topic)
+    items, candidates, near_duplicates = _items(raw, topic)
 
     body = "\n".join(head).strip()
     if items:
         body = (body + "\n\n" + "\n\n".join(items)).strip()
+        if len(items) < MAX_ITEMS:
+            # 少於 MAX_ITEMS 時要講出為什麼。訊息本身看不出「今天只有兩條」是
+            # 因為來源沒東西,還是被去重吃掉 —— 而那是「今天新聞少」跟「抓取
+            # 半殘」的差別。不講數字,連續幾天只有一條也不會有人察覺。
+            reason = f"候選 {candidates} 條"
+            if near_duplicates:
+                reason += f",其中 {near_duplicates} 條是前面某則的近乎重述"
+            body += f"\n\nℹ️ 只取到 {len(items)}/{MAX_ITEMS} 條({reason})。"
     else:
         # 這題沒東西時要講清楚是「這題沒抓到」,不是系統掛了 ——
         # owner 靠這句分辨「來源沒回應」跟「早報壞掉」,沉默兩者長得一樣
@@ -198,7 +226,17 @@ def build_message(raw: str, topic: str = "") -> str:
     if len(body) > limit:
         body = body[:limit].rstrip() + " …(截斷)"
 
-    return body + "\n\n" + FOOTER
+    return Shaped(
+        message=body + "\n\n" + FOOTER,
+        items=len(items),
+        candidates=candidates,
+        near_duplicates=near_duplicates,
+    )
+
+
+def build_message(raw: str, topic: str = "") -> str:
+    """只要訊息字串的呼叫端與既有測試走這個。"""
+    return shape(raw, topic).message
 
 
 def main(argv: list[str]) -> int:
@@ -213,9 +251,25 @@ def main(argv: list[str]) -> int:
     except OSError:
         raw = ""
 
+    shaped = shape(raw, topic)
+
+    # Telegram 那封會被滑掉,run 上的 annotation 不會。GitHub 會從 stderr 解析
+    # 這種 workflow command,所以這裡不需要動 workflow —— 而且 stdout 是訊息
+    # 本體,不能混東西進去。
+    label = topic or "(未指定主題)"
+    if shaped.items == 0:
+        print(f"::warning title=daily-brief 乾涸::「{label}」這次沒抓到任何內容", file=sys.stderr)
+    elif shaped.items < MAX_ITEMS:
+        print(
+            f"::warning title=daily-brief 缺條目::「{label}」只取到 "
+            f"{shaped.items}/{MAX_ITEMS} 條(候選 {shaped.candidates} 條、"
+            f"近重複 {shaped.near_duplicates} 條)",
+            file=sys.stderr,
+        )
+
     # 寫 bytes 而不是 text:後者要看執行環境的 stdout 編碼,
     # 替代字元 U+FFFD 在非 UTF-8 環境會再炸一次
-    sys.stdout.buffer.write((build_message(raw, topic) + "\n").encode("utf-8"))
+    sys.stdout.buffer.write((shaped.message + "\n").encode("utf-8"))
     return 0
 
 
