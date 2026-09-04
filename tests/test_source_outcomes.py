@@ -559,3 +559,45 @@ def test_captured_failure_selection_prefers_most_specific():
     for failures in ([auth, rate], [rate, auth]):
         outcome = pipeline._resolve_stream_outcome("x", None, failures)
         assert outcome["state"] == schema.AUTH_FAILED
+
+
+def test_bundle_keeps_ok_with_lane_detail_across_subqueries():
+    """A swallowed lane failure on a source that delivered items stays ``ok``
+    and carries the loss as detail; a later clean subquery keeps that detail."""
+    item = schema.SourceItem(
+        item_id="r1",
+        source="reddit",
+        title="A thread",
+        body="body",
+        url="https://www.reddit.com/r/test/comments/abc/",
+    )
+    bundle = schema.RetrievalBundle()
+    bundle.mark_attempted("reddit")
+    bundle.record_detail("reddit", "3 sub-requests rate-limited (HTTP 429)")
+    bundle.add_items("primary", "reddit", [item])
+
+    outcome = bundle.source_status["reddit"]
+    assert outcome.state == health.OK
+    assert outcome.items_returned == 1
+    assert outcome.detail == "3 sub-requests rate-limited (HTTP 429)"
+    assert outcome.fix_hint is None
+
+    bundle.add_items("secondary", "reddit", [])
+    outcome = bundle.source_status["reddit"]
+    assert outcome.state == health.OK
+    assert outcome.detail == "3 sub-requests rate-limited (HTTP 429)"
+
+
+def test_finalize_turns_an_empty_ok_source_with_lane_failures_into_that_failure():
+    """Zero items after filtering plus swallowed 429s is not 'completed cleanly
+    with zero matches'; it is the rate limit, so ## Partial Coverage fires and
+    doctor does not list the source as succeeded."""
+    bundle = schema.RetrievalBundle()
+    bundle.mark_attempted("polymarket")
+    bundle.record_detail("polymarket", "5 sub-requests rate-limited (HTTP 429)", state=schema.RATE_LIMITED)
+    bundle.add_items("primary", "polymarket", [])
+    finalized = pipeline._finalize_source_status(bundle.source_status, {"polymarket": []})
+    outcome = finalized["polymarket"]
+    assert outcome.state == schema.RATE_LIMITED
+    assert outcome.detail == "5 sub-requests rate-limited (HTTP 429)"
+    assert outcome.items_returned == 0
