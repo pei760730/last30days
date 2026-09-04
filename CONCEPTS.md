@@ -32,13 +32,25 @@ The check that a candidate item plausibly mentions the Primary entity before fin
 
 An item that fails grounding receives a decisive entity-miss demotion, designed so engagement cannot rescue off-entity content. Because the demotion is decisive, the grounding bar is deliberately conservative: its failure modes degrade toward "no penalty," never toward burying on-entity signal.
 
+### Subquery stream
+
+One source's ranked result list for one planner subquery. A run fans out into several subqueries, and each subquery queries each source separately, so the same thread can appear in several streams. A stream orders and truncates its own items and assigns them positional labels, so a label is only meaningful inside its stream; identity across streams is the item's normalized URL.
+
+### Candidate
+
+The fused unit of evidence that ranking, clustering, and rendering operate on: every copy of one item across all Subquery streams, merged by normalized URL into a single record that carries the copies' combined rank evidence. When copies of the same item differ in what they carry (one stream fetched its comments, another did not), the candidate keeps the richer version rather than the first one seen.
+
 ### Keyless path
 
 The research flow available with no API keys: source data is gathered by scraping and RSS rather than authenticated APIs, and ranking falls back to local scoring instead of LLM-based reranking. This is the free tier of the Skill; lexical quality safeguards like Entity grounding matter most here, because no LLM is available to judge relevance semantically.
 
 ### Comment-enrichment slots
 
-The small, depth-dependent budget of Reddit posts whose comments get fetched in the Keyless path. Slot selection is relevance-aware: posts that pass Entity grounding claim slots first, so the budget is not spent on high-engagement posts that final ranking will demote anyway.
+The small, depth-dependent budget of Reddit posts whose comments get fetched in the Keyless path (4 / 8 / 12 per subquery at quick / default / deep). Slot selection is relevance-aware and comment-first: posts that pass Entity grounding claim slots first, and within that tier the most-commented threads go first, so the budget is not spent on high-engagement posts that final ranking will demote or on near-empty threads.
+
+### Engagement keeper
+
+A Reddit thread that clears the relevance floor, passes Entity grounding, and ranks in the top three of its stream by upvotes plus comments. Keepers survive per-stream truncation regardless of their local rank score, and the fused candidate pool reserves a few slots (2 / 3 / 4 by depth) for the same class of thread, so the month's most-discussed on-topic threads reach the ranked output even when their title overlap with the query is weak. When the Primary entity's head token is generic ("ai", "new"), the floor rises so viral off-topic threads cannot claim the slots.
 
 ## Discovery
 

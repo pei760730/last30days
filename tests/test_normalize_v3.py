@@ -248,5 +248,80 @@ class NormalizeV3Tests(unittest.TestCase):
         )
         self.assertEqual([], normalized)
 
+    def test_youtube_keeps_older_items_when_date_window_is_empty_even_without_evergreen(self):
+        """#1043: search kept out-of-window videos so transcripts could run; normalize must not drop them."""
+        items = [
+            {
+                "video_id": "vid-old",
+                "title": "Informa TechTarget overview",
+                "url": "https://youtube.com/watch?v=vid-old",
+                "channel_name": "Example",
+                "date": "2025-01-10",
+                "transcript_snippet": "Fetched transcript about Informa TechTarget.",
+                "engagement": {"views": 1000, "likes": 50, "comments": 10},
+            }
+        ]
+        normalized = normalize.normalize_source_items(
+            "youtube",
+            items,
+            "2026-02-15",
+            "2026-03-17",
+            freshness_mode="balanced_recent",
+        )
+        self.assertEqual(1, len(normalized))
+        self.assertEqual("vid-old", normalized[0].item_id)
+        self.assertIn("Fetched transcript", normalized[0].snippet)
+
+    def test_youtube_empty_window_fallback_keeps_only_transcribed_items(self):
+        """#1043 rescue is transcript-backed evidence, not stale metadata-only videos."""
+        items = [
+            {
+                "video_id": "vid-meta",
+                "title": "Old video without captions",
+                "url": "https://youtube.com/watch?v=vid-meta",
+                "channel_name": "Example",
+                "date": "2025-01-10",
+                "engagement": {"views": 1000, "likes": 50, "comments": 10},
+            },
+            {
+                "video_id": "vid-old",
+                "title": "Informa TechTarget overview",
+                "url": "https://youtube.com/watch?v=vid-old",
+                "channel_name": "Example",
+                "date": "2025-01-10",
+                "transcript_snippet": "Fetched transcript about Informa TechTarget.",
+                "engagement": {"views": 1000, "likes": 50, "comments": 10},
+            },
+        ]
+        normalized = normalize.normalize_source_items(
+            "youtube",
+            items,
+            "2026-02-15",
+            "2026-03-17",
+            freshness_mode="balanced_recent",
+        )
+        self.assertEqual(1, len(normalized))
+        self.assertEqual("vid-old", normalized[0].item_id)
+
+    def test_youtube_empty_window_fallback_drops_all_transcript_free_videos(self):
+        items = [
+            {
+                "video_id": "vid-meta",
+                "title": "Old video without captions",
+                "url": "https://youtube.com/watch?v=vid-meta",
+                "channel_name": "Example",
+                "date": "2025-01-10",
+            }
+        ]
+        normalized = normalize.normalize_source_items(
+            "youtube",
+            items,
+            "2026-02-15",
+            "2026-03-17",
+            freshness_mode="strict_recent",
+        )
+        self.assertEqual([], normalized)
+
+
 if __name__ == "__main__":
     unittest.main()

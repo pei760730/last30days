@@ -756,9 +756,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--x-handle", help="X handle for targeted supplemental search")
     parser.add_argument("--x-related", help="Comma-separated related X handles (searched with lower weight)")
     parser.add_argument("--web-backend", default="auto",
-                        choices=["auto", "brave", "exa", "serper", "parallel", "keyless", "none"],
-                        help="Web search backend (default: auto, tries Brave then Exa then Serper then Parallel; "
-                             "keyless forces the zero-key DuckDuckGo/SearXNG floor)")
+                        choices=["auto", "brave", "exa", "serper", "parallel", "parallel-mcp", "keyless", "none"],
+                        help="Web search backend (default: auto; parallel-mcp explicitly opts into the "
+                             "anonymous hosted MCP; keyless forces the zero-key floor)")
     parser.add_argument("--deep-research", action="store_true",
                         help="Use at most one Perplexity Deep Research run. Direct PERPLEXITY_API_KEY uses the Agent API background path; OPENROUTER_API_KEY keeps the synchronous Sonar fallback; cannot be combined with competitor or vs-mode.")
     parser.add_argument("--hiring-signals", action="store_true",
@@ -1139,8 +1139,8 @@ def _missing_sources_for_promo(diag: dict[str, object]) -> str | None:
     missing = []
     if "reddit" not in available:
         missing.append("reddit")
-    if "x" not in available:
-        missing.append("x")
+    # X is optional. A successful run without X must reach the research output
+    # without an authentication or browser-cookie promo in front of it.
     # The web promo nudges toward a paid backend for higher-quality web search.
     # Grounding is now available keyless on non-native hosts, so key the promo on
     # the absence of a *paid* backend, not on grounding availability. Suppress it
@@ -1150,9 +1150,28 @@ def _missing_sources_for_promo(diag: dict[str, object]) -> str | None:
         missing.append("web")
     if not missing:
         return None
-    if "reddit" in missing and "x" in missing:
-        return "both"
     return missing[0]
+
+
+def _optional_x_omission_text(
+    diag: dict[str, object],
+    requested_sources: list[str] | None,
+) -> str | None:
+    """Return a non-blocking post-result note for a default run without X.
+
+    Explicit ``--search`` runs already define their intended source boundary,
+    so they do not need an omission note. Doctor/diagnose remains the place for
+    X setup or repair instructions.
+    """
+    if requested_sources is not None:
+        return None
+    available = set(diag.get("available_sources") or [])
+    if "x" in available:
+        return None
+    return (
+        "Optional source omitted: X/Twitter was not enabled; research "
+        "continued with the available sources."
+    )
 
 
 def _show_runtime_ui(
@@ -2914,6 +2933,9 @@ def _main(
         )
         return 2
     config = env.get_config(policy=_config_policy_for_args(args, topic, extra_argv))
+    # One memo per command: comparison mode runs pipeline.run per entity in
+    # parallel, so the reset must not live inside the pipeline.
+    http.reset_reddit_keyless_memo()
     resolved_corpus_dirs = corpus.resolve_directories(
         args.corpus, config.get("LAST30DAYS_CORPUS_DIRS")
     )
@@ -3817,6 +3839,7 @@ def _main(
             _yt_fetch_stats = _youtube_yt.get_transcript_fetch_stats()
             instagram_items = report.items_by_source.get("instagram") or []
             research_results = {
+                "active_sources": diag.get("available_sources") or [],
                 "youtube_videos_count": len(youtube_items),
                 "youtube_transcripts_count": sum(
                     1 for it in youtube_items
@@ -3864,7 +3887,13 @@ def _main(
     )
     report.artifacts["pre_research_flags_present"] = pre_research_flags_present
 
-    return _render_save_and_print(args, report, entity_reports, synthesis_md, config)
+    exit_code = _render_save_and_print(args, report, entity_reports, synthesis_md, config)
+    if args.emit in {"compact", "md", "brief"}:
+        x_omission = _optional_x_omission_text(diag, requested_sources)
+        if x_omission:
+            sys.stderr.write(f"\n{x_omission}\n")
+            sys.stderr.flush()
+    return exit_code
 
 
 if __name__ == "__main__":
