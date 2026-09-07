@@ -114,6 +114,34 @@ def normalize_source_items(
         if require_date:
             return [item for item in normalized if item.published_at]
         return normalized
+    if freshness_mode == "evergreen_ok" and source == "grounding":
+        # Undated web results are not evidence of being old — they are evidence
+        # of nothing. Keyless SERP scraping (the headless/cron floor) never
+        # yields a publish date, so `require_date` above drops 100% of what it
+        # retrieves and the run reports "Web: 0 results" while the brief still
+        # claims the web was consulted.
+        #
+        # Measured 2026-09-07 before this fix, on the real engine:
+        #   grounding.web_search(...)               -> 5 items (keyless/ddg)
+        #   normalize_source_items(..., evergreen_ok) -> 0 items
+        # and in production every daily-brief job of every topic reported
+        # `Web: 0 results` for 30 consecutive days. It is not an IP block —
+        # a probe from a GitHub runner got HTTP 200 and 10 DuckDuckGo results
+        # from the same datacenter IP the cron uses. The results were fetched
+        # and then discarded right here.
+        #
+        # Only rescue items whose date is UNKNOWN. Items with a known date that
+        # falls outside the window stay dropped — that is a separate, deliberate
+        # decision pinned by test_grounding_still_drops_older_items_in_evergreen_mode,
+        # and this must not weaken it. Rescued items already carry
+        # date_confidence="low" (see _date_confidence), so downstream ranking can
+        # and does discount them rather than treating them as fresh.
+        #
+        # Gated on the planner's own `evergreen_ok` verdict: when the plan says
+        # recency is required, an undated page really is too weak to cite.
+        undated = [item for item in normalized if not item.published_at]
+        if undated:
+            return undated
     return filtered
 
 
