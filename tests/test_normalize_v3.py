@@ -323,5 +323,88 @@ class NormalizeV3Tests(unittest.TestCase):
         self.assertEqual([], normalized)
 
 
+class GroundingUndatedRescueTests(unittest.TestCase):
+    """The keyless web floor never returns a publish date.
+
+    Incident (2026-09-07): every daily-brief job of every topic reported
+    ``Web: 0 results`` for 30 consecutive days. Not an IP block — a probe from a
+    GitHub runner got HTTP 200 + 10 DuckDuckGo results from the same datacenter
+    IP the cron uses, and ``grounding.web_search`` returned 5 items in the real
+    engine. They were retrieved and then dropped here, because ``require_date``
+    is True for grounding and keyless SERP scraping yields ``date: None``.
+
+    An unknown date is not evidence of being old. A *known* out-of-window date
+    is — and that distinction is the whole fix.
+    """
+
+    FROM = "2026-02-15"
+    TO = "2026-03-17"
+
+    @staticmethod
+    def _web(item_id, date):
+        return {
+            "id": item_id,
+            "title": f"Result {item_id}",
+            "url": f"https://example.com/{item_id}",
+            "date": date,
+            "snippet": "Some snippet.",
+        }
+
+    def _run(self, items, mode):
+        return normalize.normalize_source_items(
+            "grounding", items, self.FROM, self.TO, freshness_mode=mode
+        )
+
+    def test_undated_grounding_survives_evergreen(self):
+        """The bug: this returned [] and the brief silently had zero web coverage."""
+        normalized = self._run([self._web("g-1", None)], "evergreen_ok")
+        self.assertEqual(1, len(normalized))
+        self.assertIsNone(normalized[0].published_at)
+        # Rescued, not laundered: downstream ranking must still see it as weak.
+        self.assertEqual("low", normalized[0].date_confidence)
+
+    def test_undated_grounding_still_dropped_when_recency_required(self):
+        """The rescue is gated on the planner's own evergreen_ok verdict.
+
+        When the plan says recency is required, an undated page really is too
+        weak to cite — dropping it there is correct, not a bug.
+        """
+        for mode in ("strict_recent", "balanced_recent"):
+            with self.subTest(mode=mode):
+                self.assertEqual([], self._run([self._web("g-1", None)], mode))
+
+    def test_known_old_grounding_still_dropped_in_evergreen(self):
+        """Guard the decision this fix must NOT weaken.
+
+        Duplicates test_grounding_still_drops_older_items_in_evergreen_mode on
+        purpose: that one pins the old behaviour, this one pins that the rescue
+        did not swallow it.
+        """
+        self.assertEqual([], self._run([self._web("g-1", "2026-01-08")], "evergreen_ok"))
+
+    def test_mixed_batch_rescues_only_the_undated(self):
+        """The discriminating case: unknown survives, known-and-old does not."""
+        normalized = self._run(
+            [self._web("g-old", "2026-01-08"), self._web("g-undated", None)],
+            "evergreen_ok",
+        )
+        self.assertEqual(["g-undated"], [item.item_id for item in normalized])
+
+    def test_in_window_dated_grounding_is_untouched(self):
+        """Regression: the normal paid-backend path must not change at all."""
+        normalized = self._run([self._web("g-1", "2026-03-01")], "evergreen_ok")
+        self.assertEqual(1, len(normalized))
+        self.assertEqual("2026-03-01", normalized[0].published_at)
+        self.assertEqual("high", normalized[0].date_confidence)
+
+    def test_in_window_items_win_over_undated_ones(self):
+        """The rescue only fires when the dated filter came back empty."""
+        normalized = self._run(
+            [self._web("g-fresh", "2026-03-01"), self._web("g-undated", None)],
+            "evergreen_ok",
+        )
+        self.assertEqual(["g-fresh"], [item.item_id for item in normalized])
+
+
 if __name__ == "__main__":
     unittest.main()
