@@ -362,7 +362,12 @@ def test_pipeline_records_both_mode_semantic_leg_failure_as_partial():
         "title": "Search result",
         "url": "https://example.com/result",
         "snippet": "Raw search evidence",
-        "date": "2026-08-10",
+        # Inside the pinned as_of window below. Without that pin the window is
+        # wall-clock relative, so this fixed date drops out of range once the
+        # calendar moves past late August -- the item is then filtered out, the
+        # count reaches _finalize_source_status as 0, and the half-failure
+        # records as ERROR instead of PARTIAL.
+        "date": "2026-08-15",
         "relevance": 0.8,
         "why_relevant": "Perplexity Search result",
         "engagement": {},
@@ -384,11 +389,15 @@ def test_pipeline_records_both_mode_semantic_leg_failure_as_partial():
                 "PERPLEXITY_API_KEY": "pplx-test",
             },
             depth="quick",
+            lookback_days=30,
+            as_of_date="2026-08-20",
             requested_sources=["perplexity"],
             mock=True,
             external_plan=_perplexity_plan(),
         )
 
+    assert report.range_from == "2026-07-21"
+    assert report.range_to == "2026-08-20"
     outcome = report.source_status["perplexity"]
     assert outcome.state == schema.PARTIAL
     assert outcome.items_returned == 1
