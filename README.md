@@ -6,18 +6,18 @@ English | [Français](README.fr.md) | [Deutsch](README.de.md) | [Español](READM
 >
 > 上游是 [mvanhorn/last30days-skill](https://github.com/mvanhorn/last30days-skill),**這一段以下的整份 README 是上游原文、不動**(跟 [AGENTS.md](AGENTS.md) 同一個約定:fork 專屬內容只寫在自己的區塊裡)。
 >
-> **這個 repo 每天只做一件事**:早上 **07:00(台北)** 自動跑 [`research-topics.txt`](research-topics.txt) 的前 3 個主題,各出一份 brief,取每題前 3 條 storyline 合併,透過 kai-notify 推到 Telegram。實作在 [`.github/workflows/daily-brief.yml`](.github/workflows/daily-brief.yml)。
+> **這個 repo 每天只做一件事**:早上 **07:00(台北)** 自動跑 [`research-topics.txt`](research-topics.txt) 的前 3 個主題,各出一份 brief,每題取前 3 條 storyline 各推一封,透過 kai-notify 推到 Telegram。實作在 [`.github/workflows/daily-brief.yml`](.github/workflows/daily-brief.yml)。
 >
 > | 事項 | 說明 |
 > |---|---|
 > | **唯一旋鈕** | [`research-topics.txt`](research-topics.txt) — 一行一題,`#` 開頭 = 註解 |
-> | **只跑前 3 條** | 第 4 條起永遠不會跑(`head -3`);清單超過 3 條時 brief 尾巴會明示警告,不沉默 |
+> | **只跑前 3 條** | 第 4 條起永遠不會跑(`head -3`);清單超過 3 條時會另推一封警告,不沉默 |
 > | **每題可帶 flags** | 主題後面接一個空格 + `--` 開頭的 flags,只影響那一題。最常用 `--search`(逗號分隔的來源白名單)擋掉會污染該題的來源;白名單裡沒設 key 的來源自動 no-op,不會壞 |
 > | **怎麼改主題** | 在對話裡跟 Claude 說「加/換主題」就好,你不用開檔 |
 > | **推理大腦** | headless 沒 host 模型,靠免費 Gemini key(`GOOGLE_API_KEY`);沒 key 自動 fallback 到內建 deterministic,不會壞 |
 > | **手動跑一次** | Actions → daily-brief → Run workflow(`topic` 留空 = 讀清單前 3 條) |
 > | **通知涵蓋** | 成功推 brief、失敗推 🔴、被中止推 🟠(逾時 15 分 / 人為按停 / 被新一輪取代)— 三種出口都不靜默 |
-> | **字數上限** | Telegram 上限 4096 字元,保守截到 3500,再按題數均分(每題 `(3500-120)/N`)。單題超額會標 `…(本題截斷)`,不是先到先贏 |
+> | **字數上限** | Telegram 單封上限 4096 字元;每題一封,各自保守截到 3800(`BUDGET`,[`tools/brief_to_message.py`](tools/brief_to_message.py)),超額會標 `…(截斷)` |
 > | **需要的 secrets** | `KAI_NOTIFY_BOT_TOKEN`、`KAI_NOTIFY_CHAT_ID`、`GOOGLE_API_KEY`(選配) |
 >
 > **🚫 紅線:別下 `--deep`** — 會叫付費模型,本帳號實測 429。日常一律 `--emit brief`(cron 已固定)。
@@ -27,9 +27,9 @@ English | [Français](README.fr.md) | [Deutsch](README.de.md) | [Español](READM
 >
 > 早報是 fail-soft 設計,以下都是預期行為,不用開 issue 也不用重跑:
 >
-> - **某一題內容很少或整題不見** — 單題抓取失敗會被吞掉(`|| true`),不讓一題拖垮整輪。
-> - **收到「⚠️ last30days daily-brief 這次沒產出內容(來源可能全部無回應)」** — 這是保底訊息,workflow 本身是綠的。三題全部無回應才會出現。
-> - **內容結尾是 `…(本題截斷)`** — 撞到上面的字數配額,不是抓取中斷。
+> - **某一題內容很少** — 結尾會註明 `ℹ️ 只取到 N/3 條(原因)`;單題抓取失敗會被吞掉(`|| true`),不拖垮其他題。
+> - **收到 `⚠️ 「主題」這次沒抓到內容(來源可能全部無回應)` 或 `📭 「主題」今天沒有新東西`** — 那一題的保底訊息(📭 = 抓到了但近 7 天都送過),workflow 本身是綠的。每題各自判斷,不影響其他題。
+> - **內容結尾是 `…(截斷)`** — 撞到上面的字數配額,不是抓取中斷。
 >
 > 真的壞掉時你會收到 🔴 或 🟠,兩者都帶 Actions run 連結。**沒收到任何訊息**才是要查的狀況(cron 沒跑起來)。
 >
