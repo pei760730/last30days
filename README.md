@@ -17,7 +17,7 @@ English | [Français](README.fr.md) | [Deutsch](README.de.md) | [Español](READM
 > | **推理大腦** | headless 沒 host 模型,靠免費 Gemini key(`GOOGLE_API_KEY`);沒 key 自動 fallback 到內建 deterministic,不會壞 |
 > | **手動跑一次** | Actions → daily-brief → Run workflow(`topic` 留空 = 讀清單前 3 條) |
 > | **通知涵蓋** | 成功推 brief、失敗推 🔴、被中止推 🟠(逾時 15 分 / 人為按停 / 被新一輪取代)— 三種出口都不靜默 |
-> | **字數上限** | Telegram 上限 4096 字元,保守截到 3500,再按題數均分(每題 `(3500-120)/N`)。單題超額會標 `…(本題截斷)`,不是先到先贏 |
+> | **字數上限** | Telegram 單封上限 4096 字元,保守用 3800(`BUDGET`,[tools/brief_to_message.py](tools/brief_to_message.py))。每題自 #32 起各自成一封訊息(matrix,一題一 job),不再合併一封按題數均分。單題超額會標 `…(截斷)`,不是先到先贏 |
 > | **需要的 secrets** | `KAI_NOTIFY_BOT_TOKEN`、`KAI_NOTIFY_CHAT_ID`、`GOOGLE_API_KEY`(選配) |
 >
 > **🚫 紅線:別下 `--deep`** — 會叫付費模型,本帳號實測 429。日常一律 `--emit brief`(cron 已固定)。
@@ -29,7 +29,7 @@ English | [Français](README.fr.md) | [Deutsch](README.de.md) | [Español](READM
 >
 > - **某一題內容很少或整題不見** — 單題抓取失敗會被吞掉(`|| true`),不讓一題拖垮整輪。
 > - **收到「⚠️ last30days daily-brief 這次沒產出內容(來源可能全部無回應)」** — 這是保底訊息,workflow 本身是綠的。三題全部無回應才會出現。
-> - **內容結尾是 `…(本題截斷)`** — 撞到上面的字數配額,不是抓取中斷。
+> - **內容結尾是 `…(截斷)`** — 撞到上面的字數配額,不是抓取中斷。
 >
 > 真的壞掉時你會收到 🔴 或 🟠,兩者都帶 Actions run 連結。**沒收到任何訊息**才是要查的狀況(cron 沒跑起來)。
 >
