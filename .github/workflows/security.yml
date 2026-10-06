@@ -88,12 +88,18 @@ jobs:
           persist-credentials: false
 
       # Advisory-first: visibility before enforcement. Semgrep CE scans
-      # the repository with the community rule set (Python, shell, YAML,
-      # JavaScript, Go) to catch source-level security bugs before they
-      # reach production. Set continue-on-error: false once a clean baseline
-      # is confirmed.
+      # the git-tracked files with the p/default registry ruleset to catch
+      # source-level security bugs before they reach production. Findings
+      # are reported (job summary + warning) but do not fail the job.
+      # `--config=auto` is not usable here: Semgrep refuses it when metrics
+      # are off ("Cannot create auto config when metrics are off") and exits 2.
+      # A run that does not complete fails the job instead of passing silently.
       - name: Run Semgrep SAST scan
-        continue-on-error: true
         env:
           SEMGREP_SEND_METRICS: off
-        run: semgrep scan --config=auto
+        run: |
+          set +e
+          semgrep scan --config p/default --metrics off --json-output="$RUNNER_TEMP/semgrep.json"
+          scan_exit=$?
+          set -e
+          python3 .github/scripts/semgrep_summary.py "$scan_exit" "$RUNNER_TEMP/semgrep.json"

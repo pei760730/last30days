@@ -47,9 +47,14 @@ def test_security_workflow_runs_sast_without_unused_code_scanning_permission() -
     sast_job = text.split("sast-scan:", 1)[1]
 
     assert "semgrep/semgrep@sha256:" in sast_job
-    assert "semgrep scan --config=auto" in sast_job
+    assert "semgrep scan --config p/default --metrics off" in sast_job
     assert "SEMGREP_SEND_METRICS: off" in sast_job
-    assert "continue-on-error: true" in sast_job
+    # Semgrep refuses `--config=auto` when metrics are off (exit 2), and
+    # continue-on-error hid that the scan never ran.
+    assert "semgrep scan --config=auto" not in sast_job
+    assert "semgrep scan --config auto" not in sast_job
+    assert "continue-on-error" not in sast_job
+    assert 'python3 .github/scripts/semgrep_summary.py "$scan_exit"' in sast_job
     assert "contents: read" in sast_job
     assert "security-events: write" not in sast_job
     assert "--sarif" not in sast_job
