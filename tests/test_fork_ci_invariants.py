@@ -20,6 +20,7 @@ of costing quota or going dark for weeks.
 from __future__ import annotations
 
 from pathlib import Path
+import shlex
 
 import pytest
 import yaml
@@ -113,3 +114,18 @@ def test_seen_state_is_saved_only_after_a_successful_push() -> None:
         "the save step must keep the default success() condition — an always() "
         "would record storylines as sent on a run that never delivered them."
     )
+
+
+def test_daily_brief_formats_the_raw_json_report_it_generated() -> None:
+    steps = _load(WORKFLOW_DIR / "daily-brief.yml")["jobs"]["brief"]["steps"]
+    script = next(step["run"] for step in steps if step.get("id") == "gen")
+    # Parse executable commands, not comments which also mention old --emit brief.
+    lines = [shlex.split(line) for line in script.replace("\\\n", " ").splitlines()
+             if line.strip() and not line.lstrip().startswith("#")]
+    engine = next(line for line in lines if line[:2] == ["python", "$CLI"])
+    assert engine[engine.index("--emit") + 1] == "json"
+    assert engine[engine.index("--json-profile") + 1] == "raw"
+    assert engine[engine.index(">") + 1] == "report.json"
+    formatter = next(line for line in lines if line[:2] == ["python", "tools/brief_to_message.py"])
+    assert formatter[2] == engine[engine.index(">") + 1]
+    assert formatter[formatter.index(">") + 1] == "message.md"
