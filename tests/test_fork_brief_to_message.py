@@ -13,6 +13,10 @@ import importlib.util
 import sys
 from pathlib import Path
 
+import pytest
+
+from lib import render, schema
+
 _MODULE_PATH = Path(__file__).resolve().parents[1] / "tools" / "brief_to_message.py"
 _spec = importlib.util.spec_from_file_location("fork_brief_to_message", _MODULE_PATH)
 assert _spec and _spec.loader
@@ -421,3 +425,143 @@ def test_cli_writes_and_then_honours_the_state_file(tmp_path, capsys):
     assert "今天沒有新東西" in second.out
     assert "Alpha moves" not in second.out
     assert "::notice" in second.err
+
+
+def test_final_render_keeps_budget_and_only_caches_visible_titles(tmp_path, capsys, monkeypatch):
+    titles = tuple(letter * 2000 for letter in "abc")
+    raw = _brief(*titles)
+    shaped = btm.shape(raw, "T")
+    assert len(shaped.message) <= btm.BUDGET
+    assert shaped.message.endswith(btm.FOOTER)
+    assert shaped.items == 1
+    assert shaped.shipped == (frozenset({titles[0]}),)
+    assert titles[0] in shaped.message
+    assert "### 2." not in shaped.message
+
+    brief = tmp_path / "brief.txt"
+    brief.write_text(raw, encoding="utf-8")
+    state = tmp_path / "seen.json"
+    monkeypatch.setattr(btm, "_today", lambda: "2026-10-01")
+    monkeypatch.setattr(btm, "_cutoff", lambda window: "2026-09-24")
+    assert btm.main(["brief_to_message.py", str(brief), "T", "--seen", str(state)]) == 0
+    first = capsys.readouterr()
+    assert first.out.rstrip("\n") == shaped.message
+    assert "1/3" in first.err
+    assert btm.load_seen(str(state)) == shaped.shipped
+
+    monkeypatch.setattr(btm, "_today", lambda: "2026-10-02")
+    monkeypatch.setattr(btm, "_cutoff", lambda window: "2026-09-25")
+    next_day = btm.shape(raw, "T", btm.load_seen(str(state)))
+    assert next_day.repeats == 1
+    assert next_day.items == 1
+    assert next_day.shipped == (frozenset({titles[1]}),)
+    assert titles[1] in next_day.message
+
+
+@pytest.mark.parametrize("cut", ["header", "before_title", "inside_title", "title_end", "quote", "exact_fit"])
+def test_final_render_boundaries_keep_counts_and_fingerprints_in_sync(monkeypatch, cut):
+    titles = ("Mars colony expands", "Vaccine trial succeeds", "Ocean currents reverse")
+    raw = _brief(*(f"{title} (score 50, Reddit)" for title in titles))
+    full = btm.shape(raw, "T")
+    second_start = full.message.index("### 2.")
+    second_end = full.message.index("\n", second_start)
+    cut_at = {
+        "header": 5,
+        "before_title": second_start,
+        "inside_title": second_start + 12,
+        "title_end": second_end,
+        "quote": second_end + 4,
+    }
+    budget = len(full.message) if cut == "exact_fit" else cut_at[cut] + len(" …(截斷)\n\n" + btm.FOOTER)
+    monkeypatch.setattr(btm, "BUDGET", budget)
+    shaped = btm.shape(raw, "T")
+    visible = [title for title in titles if title + " (score 50, Reddit)" in shaped.message]
+    expected_count = {"header": 0, "before_title": 1, "inside_title": 1, "title_end": 2, "quote": 2, "exact_fit": 3}[cut]
+    assert len(shaped.message) <= budget
+    assert shaped.message.endswith(btm.FOOTER)
+    assert len(visible) == shaped.items == expected_count
+    assert shaped.shipped == tuple(frozenset(title.lower().split()) for title in visible)
+    assert sum(line.startswith("### ") for line in shaped.message.splitlines()) == expected_count
+    if cut == "exact_fit":
+        assert shaped.message == full.message
+    else:
+        assert "…(截斷)" in shaped.message
+
+
+def _upstream_brief(*titles: str, uncertainty: str | None = None) -> str:
+    """Exercise the real renderer's score/source/uncertainty suffix offline."""
+    candidates = [
+        schema.Candidate(
+            candidate_id=str(i), item_id=str(i), source="reddit", title=title,
+            url="https://example.invalid/story", snippet="", subquery_labels=[],
+            native_ranks={}, local_relevance=1.0, freshness=100, engagement=None,
+            source_quality=1.0, rrf_score=1.0, final_score=50,
+        )
+        for i, title in enumerate(titles)
+    ]
+    report = schema.Report(
+        topic="T", range_from="2026-09-01", range_to="2026-09-30",
+        generated_at="2026-10-01T00:00:00Z",
+        provider_runtime=schema.ProviderRuntime("local", "synthetic", "synthetic"),
+        query_plan=schema.QueryPlan("news", "strict_recent", "story", "T", [], {}),
+        clusters=[
+            schema.Cluster(c.candidate_id, c.title, [c.candidate_id], [c.candidate_id],
+                           ["reddit"], 50, uncertainty)
+            for c in candidates
+        ],
+        ranked_candidates=candidates, items_by_source={}, errors_by_source={},
+    )
+    return render.render_brief(report)
+
+
+@pytest.mark.parametrize("uncertainty", [None, "thin-evidence", "single-source"])
+def test_upstream_qualifiers_do_not_make_unrelated_stories_duplicates(uncertainty):
+    raw = _upstream_brief("Mars colony expands", "Vaccine trial succeeds", uncertainty=uncertainty)
+    headers = [line for line in raw.splitlines() if line.startswith("### ")]
+    suffix = "" if uncertainty is None else f" [{uncertainty.replace('-', ' ')}]"
+    assert headers[0] == f"### 1. Mars colony expands (score 50, Reddit){suffix}"
+    assert btm._title_tokens(headers[0], "T") == {"mars", "colony", "expands"}
+    assert btm._title_tokens(headers[1], "T") == {"vaccine", "trial", "succeeds"}
+    shaped = btm.shape(raw, "T")
+    assert shaped.items == 2
+    assert shaped.near_duplicates == 0
+    prior = btm.shape(_upstream_brief("Mars colony expands", uncertainty=uncertainty), "T").shipped
+    next_day = btm.shape(raw, "T", prior)
+    assert next_day.items == next_day.repeats == 1
+    assert "Vaccine trial succeeds" in next_day.message
+
+
+@pytest.mark.parametrize("uncertainty", ["thin-evidence", "single-source"])
+def test_upstream_qualifiers_preserve_real_duplicate_and_distinct_claim_policy(uncertainty):
+    # These calibrated examples straddle the existing 0.55 overlap threshold.
+    titles = tuple(title.rsplit(" (score", 1)[0] for title in (_EARNINGS_A, _EARNINGS_B, _BURRY_A, _BURRY_B))
+    shaped = btm.shape(_upstream_brief(*titles, uncertainty=uncertainty), "Palantir PLTR")
+    assert shaped.items == 3
+    assert shaped.near_duplicates == 1
+    assert "JUST IN" not in shaped.message
+    assert "opened a new short position" in shaped.message
+    assert "under $1 over the long run" in shaped.message
+
+
+@pytest.mark.parametrize("title", ["Thin evidence in vaccine trial", "Mars [single source]", "A (score 50, Reddit) discussion"])
+def test_metadata_words_inside_real_title_are_preserved(title):
+    raw = _upstream_brief(title, uncertainty="thin-evidence")
+    header = next(line for line in raw.splitlines() if line.startswith("### "))
+    assert btm._title_tokens(header, "T") == btm._title_tokens(title, "T")
+
+
+@pytest.mark.parametrize("has_prior", [False, True])
+def test_no_complete_title_warns_about_truncation_not_sources_or_repeats(tmp_path, capsys, has_prior):
+    brief = tmp_path / "brief.txt"
+    brief.write_text(_brief("Alpha moves first", "b" * 4000) if has_prior else _brief("b" * 4000), encoding="utf-8")
+    state = tmp_path / "seen.json"
+    if has_prior:
+        btm.save_seen(str(state), _fingerprints("Alpha moves first", topic="T"))
+    prior = btm.load_seen(str(state))
+    assert btm.main(["brief_to_message.py", str(brief), "T", "--seen", str(state)]) == 0
+    captured = capsys.readouterr()
+    assert "::warning" in captured.err
+    assert "截斷" in captured.err
+    assert "全部" not in captured.err
+    assert "沒抓到" not in captured.err
+    assert btm.load_seen(str(state)) == prior

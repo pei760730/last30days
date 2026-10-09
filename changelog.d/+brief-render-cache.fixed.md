@@ -1,0 +1,1 @@
+Keep daily brief messages within their character budget, including the truncation marker and footer, and remember only stories whose complete titles were emitted. Exclude upstream evidence qualifiers from title fingerprints so unrelated stories are not suppressed as duplicates.

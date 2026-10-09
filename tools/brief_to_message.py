@@ -85,7 +85,12 @@ def _title_tokens(title: str, topic: str) -> set[str]:
     所有配對灌一個固定的假相似度。
     """
     text = re.sub(r"^###\s*\d+\.\s*", "", title.strip())
-    text = re.sub(r"\(score\s+\d+[^)]*\)\s*$", "", text).strip()
+    # render_brief appends an uncertainty qualifier after the score/source tuple.
+    text = re.sub(
+        r"\(score\s+\d+[^)]*\)(?:\s+\[(?:thin evidence|single source)\])?\s*$",
+        "",
+        text,
+    ).strip()
     topic_words = set(re.findall(r"[a-z0-9]+", topic.lower()))
     return {
         w
@@ -233,6 +238,7 @@ def shape(
     items, candidates, near_duplicates, repeats, shipped = _items(raw, topic, prior)
 
     body = "\n".join(head).strip()
+    item_start = len(body) + 2 if body else 0
     if items:
         body = (body + "\n\n" + "\n\n".join(items)).strip()
         if len(items) < MAX_ITEMS:
@@ -261,9 +267,21 @@ def shape(
         body = (body + "\n\n" + note).strip() if body else note
 
     # 先扣掉頁尾再截,否則超長的時候被切掉的正好是那行免責聲明
-    limit = BUDGET - len(FOOTER) - 4
+    limit = BUDGET - len(FOOTER) - 2
     if len(body) > limit:
-        body = body[:limit].rstrip() + " …(截斷)"
+        marker = " …(截斷)"
+        cut = limit - len(marker)
+        for i, item in enumerate(items):
+            title = item.split("\n", 1)[0]
+            if item_start + len(title) > cut:
+                # Never emit/cache a partial title; a shortened quote is still
+                # useful when its complete title identifies the shipped story.
+                cut = min(cut, item_start)
+                items = items[:i]
+                shipped = shipped[:i]
+                break
+            item_start += len(item) + 2
+        body = body[:cut].rstrip() + marker
 
     return Shaped(
         message=body + "\n\n" + FOOTER,
@@ -379,7 +397,13 @@ def main(argv: list[str]) -> int:
     # 這種 workflow command,所以這裡不需要動 workflow —— 而且 stdout 是訊息
     # 本體,不能混東西進去。
     label = topic or "(未指定主題)"
-    if shaped.items == 0 and shaped.repeats:
+    if shaped.items == 0 and shaped.candidates > shaped.near_duplicates + shaped.repeats:
+        print(
+            f"::warning title=daily-brief 截斷::「{label}」候選 {shaped.candidates} 條,"
+            "沒有完整標題能放進字數上限",
+            file=sys.stderr,
+        )
+    elif shaped.items == 0 and shaped.repeats:
         print(
             f"::notice title=daily-brief 沒有新東西::「{label}」候選 {shaped.candidates} 條,"
             f"全部在近 {args.window} 天送過",
