@@ -12,6 +12,7 @@ import json
 import importlib.util
 import re
 import sys
+import datetime
 from pathlib import Path
 
 import pytest
@@ -24,6 +25,11 @@ assert _spec and _spec.loader
 btm = importlib.util.module_from_spec(_spec)
 sys.modules["fork_brief_to_message"] = btm
 _spec.loader.exec_module(btm)
+
+
+@pytest.fixture(autouse=True)
+def _fixed_execution_clock(monkeypatch):
+    monkeypatch.setattr(btm, "_run_now", lambda: datetime.datetime(2026, 10, 8, 23, tzinfo=datetime.timezone.utc))
 
 
 BRIEF = """# Production Brief: Palantir PLTR
@@ -97,7 +103,7 @@ def test_no_storylines_keeps_header_and_warns():
     raw = "# Production Brief: T\n\n- Sources: 0 active\n\n## Ranked Storylines\n"
     msg = btm.build_message(raw, "T")
     assert msg.startswith("📰 T")
-    assert "沒抓到內容" in msg
+    assert "觀察窗內沒有內容" in msg
 
 
 def test_footer_survives_truncation():
@@ -308,7 +314,7 @@ def test_short_message_blames_deduplication_when_that_is_the_cause():
     assert shaped.items == 1
     assert shaped.candidates == 2
     assert shaped.near_duplicates == 1
-    assert "同一件事、已併入" in shaped.message
+    assert "標題相近、已併入" in shaped.message
 
 
 def test_candidates_are_counted_past_the_three_that_ship():
@@ -646,7 +652,7 @@ def test_scenario_message_keeps_the_reading_contract(scenario):
     msg = shaped.message
     assert len(msg) <= btm.BUDGET
     assert msg.endswith(btm.FOOTER)
-    assert msg.startswith(f"📰 {scenario.topic} · {scenario.range_to} 早報")
+    assert msg.startswith(f"📰 {scenario.topic} · 2026-10-09 早報")
     assert f"觀察窗 {scenario.range_from} → {scenario.range_to}" in msg
     for noise in ("(score", "###", " active", "_Why", "Safety note", "Production Brief"):
         assert noise not in msg, noise
@@ -715,7 +721,7 @@ def test_sources_engagement_and_link_follow_the_event():
     assert first[0].endswith("European rail operator")
     assert "Hacker News + Reddit" in first[1]
     assert "310 讚 · 140 留言" in first[1]
-    assert "多來源交叉" in first[1]
+    assert "多來源交叉" not in first[1]
     assert first[2].startswith("「The operator said")
     assert first[3].startswith("🔗 https://example.invalid/hackernews/1-palantir-signs-a-synthetic")
     assert "有回應的來源:Hacker News、Polymarket、Reddit" in msg
@@ -732,9 +738,9 @@ def test_same_event_from_two_sources_folds_into_one_line_with_the_extra_source()
     assert shaped.near_duplicates == 1
     assert "JUST IN" not in msg
     first = _story_blocks(msg)[0]
-    assert "Hacker News" in first[1] and "另見 Reddit" in first[1] and "多來源交叉" in first[1]
+    assert "Hacker News" in first[1] and "另見 Reddit" in first[1] and "多來源交叉" not in first[1]
     assert "Britain would be bonkers" in msg
-    assert "同一件事、已併入" in msg
+    assert "標題相近、已併入" in msg
 
 
 def test_distinct_events_about_the_same_person_stay_separate():
@@ -807,10 +813,10 @@ def test_over_budget_drops_whole_storylines_and_keeps_links_intact():
 # ── 6 組保留情境(實作定稿後才寫,沒拿來調整實作) ──────────────────────
 
 
-def test_holdout_thin_evidence_keeps_the_qualifier_and_marks_corroboration():
+def test_holdout_thin_evidence_keeps_the_qualifier_without_claiming_corroboration():
     blocks = _story_blocks(_shape("thin_evidence").message)
     assert "證據薄弱" in blocks[0][1]
-    assert "Hacker News + Reddit" in blocks[1][1] and "多來源交叉" in blocks[1][1]
+    assert "Hacker News + Reddit" in blocks[1][1] and "多來源交叉" not in blocks[1][1]
 
 
 def test_holdout_html_entities_and_boilerplate_are_scrubbed():
@@ -860,11 +866,11 @@ def test_title_that_is_only_a_link_is_not_scrubbed_to_nothing():
     assert "(無標題)" not in shaped.message
 
 
-def test_corrupt_json_is_treated_as_nothing_fetched():
-    """引擎半路掛掉留下殘缺 JSON:不是紅燈,是「沒抓到內容」那句。"""
+def test_corrupt_json_is_reported_as_incomplete_input():
+    """引擎半路掛掉留下殘缺 JSON:明示輸入殘缺,不猜來源結果。"""
     shaped = btm.shape('{"topic": "T", "ranked_candidates": [', "T")
     assert shaped.items == 0 and shaped.candidates == 0
-    assert "沒抓到內容" in shaped.message
+    assert "輸入空白或殘缺" in shaped.message
 
 
 def test_cli_reads_a_json_report_and_remembers_what_it_shipped(tmp_path, capsys, monkeypatch):
@@ -876,7 +882,7 @@ def test_cli_reads_a_json_report_and_remembers_what_it_shipped(tmp_path, capsys,
     monkeypatch.setattr(btm, "_cutoff", lambda window: "2026-10-01")
     assert btm.main(["brief_to_message.py", str(report), scenario.topic, "--seen", str(state)]) == 0
     first = capsys.readouterr()
-    assert first.out.startswith("📰 MP Materials rare earth · 2026-10-08 早報")
+    assert first.out.startswith("📰 MP Materials rare earth · 2026-10-09 早報")
     assert "🔗 https://example.invalid/" in first.out
     assert first.err == ""  # 滿三條不該有 annotation
     assert len(btm.load_seen(str(state))) == 3

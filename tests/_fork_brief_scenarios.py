@@ -508,9 +508,9 @@ HOLDOUTS: tuple[Scenario, ...] = (
         _PLTR,
         (
             Spec(
-                "Synthetic: a single comment claims Palantir lost a UK NHS renewal",
-                "One comment, no link. (synthetic)",
-                ("reddit",),
+                "Synthetic: low-score posts claim Palantir lost a UK NHS renewal",
+                "Low-score posts, unverified. (synthetic)",
+                ("reddit", "hackernews"),
                 "2026-10-06",
                 engagement={"score": 3},
                 score=30,
@@ -525,7 +525,7 @@ HOLDOUTS: tuple[Scenario, ...] = (
                 score=58,
             ),
         ),
-        note="證據薄弱的限定要保留;多來源那條要標交叉",
+        note="兩個來源且低分的證據薄弱限定要保留;平台名稱不表示佐證",
     ),
     Scenario(
         "html_entities",

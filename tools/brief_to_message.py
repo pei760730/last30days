@@ -6,7 +6,7 @@ fork 專屬(上游沒有這支)。`.github/workflows/daily-brief.yml` 每題呼�
 輸入兩種都收:
 - `--emit json --json-profile raw` 的完整 Report(cron 現在走這條):每條 storyline
   帶得出發布日期、來源、原文連結;
-- `--emit brief` 的 Markdown 文字(舊路徑、手動跑、或 JSON 壞掉時的退路):
+- `--emit brief` 的 Markdown 文字(舊路徑、手動跑):
   只有標題與引文,日期一律標「不明」,不猜。
 
 選哪幾條、怎麼排,全部沿用上游 `render.render_brief` 的規則(relevance floor、
@@ -67,6 +67,17 @@ TRUNCATED_MARK = "…(截斷"
 # `I&#39;ve`、`&#32;`(Reddit RSS 的 HTML 實體)。
 _HTML_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
 _HTML_TAG = re.compile(r"<[^>]{1,200}>")
+# Titles keep comparisons and URLs. Only recognizable HTML markup with
+# syntactically assigned attributes is stripped; `< b but revenue >` is text.
+_TITLE_HTML_TAG = re.compile(
+    r"</?(?:a|abbr|article|aside|b|blockquote|br|code|div|em|h[1-6]|hr|i|img|"
+    r"li|ol|p|pre|s|section|small|span|strong|sub|sup|table|td|th|tr|u|ul|"
+    r"audio|body|button|caption|dd|details|dl|dt|figure|figcaption|footer|form|"
+    r"head|header|html|input|label|link|main|mark|meta|nav|option|script|select|"
+    r"source|style|summary|tbody|textarea|thead|time|title|video)"
+    r"(?:\s+[A-Za-z_:][\w:.-]*\s*=\s*(?:\"[^\"]*\"|'[^']*'|[^\s<>\"'=]+))*\s*/?>",
+    re.IGNORECASE,
+)
 
 # Reddit RSS 的樣板尾巴:`submitted by /u/<user> to r/<sub> [link] [comments]`。
 # 有真內文時它是尾巴,沒真內文時它就是整段引文 —— 實測後者很常見
@@ -174,7 +185,18 @@ def _clean(text: str) -> str:
 
 
 def _title(text: str) -> str:
-    """標題也洗,但洗空了就退回原文:一條只有網址的標題,網址本身就是那條資訊。"""
+    """保留正文、比較式與網址,只去已辨識的 HTML 標記與註解。"""
+    text = _TITLE_HTML_TAG.sub(" ", _HTML_COMMENT.sub(" ", text))
+    text = html.unescape(html.unescape(text))
+    return re.sub(r"\s+", " ", text).strip() or "(無標題)"
+
+
+def _fingerprint_title(text: str) -> str:
+    """Keep #60's existing cache identity separate from corrected display text.
+
+    _clean is deliberately unchanged: old files retain their exact fingerprints
+    and the same 0.55 comparisons without a cache migration or version bump.
+    """
     return _clean(text) or re.sub(r"\s+", " ", html.unescape(text)).strip() or "(無標題)"
 
 
@@ -198,6 +220,7 @@ class Story:
     uncertainty: str | None = None  # single-source / thin-evidence
     engagement: str = ""  # 已排好版的互動數,如 "120 讚 · 48 留言"
     also: tuple[str, ...] = ()  # 被併進來的近重複條目帶來的其他來源
+    fingerprint_title: str | None = None  # pre-repair cache identity, not display text
 
 
 @dataclass(frozen=True)
@@ -206,6 +229,8 @@ class Head:
     range_from: str = ""
     range_to: str = ""
     sources: tuple[str, ...] = ()  # 有回應的來源(標籤)
+    input_state: str = "valid"  # valid / incomplete / invalid-report
+    input_error: str = ""
 
 
 @dataclass(frozen=True)
@@ -219,6 +244,9 @@ class Shaped:
     repeats: int
     shipped: tuple[frozenset[str], ...]
     dropped_for_budget: int = 0
+    input_state: str = "valid"
+    input_error: str = ""
+    responsive_sources: bool = False
 
 
 # ── 輸入解析:Report(JSON)或 brief 文字 → Head + Story 清單 ──────────
@@ -279,30 +307,18 @@ def _story_from_cluster(
         for cid in render._qualifying_representative_ids(cluster, candidate_by_id, limit=2)
         if cid in candidate_by_id
     ]
-    quote = _clean(" ".join(c.snippet for c in reps if c.snippet))
-    url = next((c.url for c in reps if c.url and c.url.startswith("http")), "")
-    if not url:
-        url = next(
-            (
-                candidate_by_id[cid].url
-                for cid in cluster.candidate_ids
-                if cid in candidate_by_id
-                and candidate_by_id[cid].url
-                and candidate_by_id[cid].url.startswith("http")
-            ),
-            "",
-        )
-    published: str | None = None
-    confidence: str | None = None
-    primary: schema.SourceItem | None = None
-    for candidate in reps:
-        item = schema.candidate_primary_item(candidate)
-        if primary is None and item is not None:
-            primary = item
-        for source_item in candidate.source_items:
-            date = _date_parts(source_item.published_at)
-            if date and (published is None or date > published):
-                published, confidence = date, source_item.date_confidence
+    representative = reps[0] if reps else None
+    primary = schema.candidate_primary_item(representative) if representative else None
+    # One provenance for date, URL, engagement and quote. Missing fields stay
+    # missing instead of borrowing a newer date or a different author's quote.
+    if primary:
+        quote = _clean(primary.snippet or primary.body)
+    else:
+        quote = _clean(representative.snippet) if representative else ""
+    url = primary.url if primary else representative.url if representative else ""
+    url = url if url.startswith(("http://", "https://")) else ""
+    published = _date_parts(primary.published_at) if primary else None
+    confidence = primary.date_confidence if primary else None
     return Story(
         title=_title(cluster.title),
         quote=quote,
@@ -312,6 +328,7 @@ def _story_from_cluster(
         date_confidence=confidence,
         uncertainty=cluster.uncertainty,
         engagement=_engagement_text(primary),
+        fingerprint_title=_fingerprint_title(cluster.title),
     )
 
 
@@ -387,23 +404,35 @@ def stories_from_text(raw: str) -> tuple[Head, list[Story]]:
                 quote=_clean(" ".join(body)),
                 sources=sources,
                 uncertainty=uncertainty,
+                fingerprint_title=_fingerprint_title(heading),
             )
         )
     return _head_from_text(raw), stories
 
 
 def parse_input(raw: str) -> tuple[Head, list[Story]]:
-    """JSON 就走 Report,否則當 brief 文字。壞掉的 JSON 等於空輸入(fail-soft)。"""
+    """Separate a valid empty report from missing input and schema failures."""
     stripped = raw.lstrip()
-    if stripped.startswith("{"):
+    if not stripped:
+        return Head(input_state="incomplete", input_error="empty input"), []
+    if not stripped.startswith("# Production Brief:"):
         try:
             payload = json.loads(stripped)
-            if isinstance(payload, dict) and "ranked_candidates" in payload:
-                return stories_from_report(schema.report_from_dict(payload))
-        except (ValueError, KeyError, TypeError):
-            pass
-        # JSON 殘缺:當成什麼都沒抓到,讓下面的「沒抓到內容」那句講出來
-        return Head(), []
+        except json.JSONDecodeError as exc:
+            return Head(input_state="incomplete", input_error=f"JSON line {exc.lineno}, column {exc.colno}: {exc.msg}"), []
+        try:
+            if not isinstance(payload, dict):
+                raise ValueError("Report root must be an object")
+            for key in ("topic", "range_from", "range_to", "generated_at"):
+                if not isinstance(payload.get(key), str):
+                    raise ValueError(f"Report {key} must be str")
+            for key, expected in (("ranked_candidates", list), ("clusters", list), ("items_by_source", dict)):
+                if not isinstance(payload.get(key), expected):
+                    raise ValueError(f"Report {key} must be {expected.__name__}")
+            return stories_from_report(schema.report_from_dict(payload))
+        except (ValueError, KeyError, TypeError, AttributeError) as exc:
+            # Never echo the payload; diagnostic detail is annotation-escaped.
+            return Head(input_state="invalid-report", input_error=f"{type(exc).__name__}: {exc}"), []
     return stories_from_text(raw)
 
 
@@ -431,10 +460,10 @@ def _select(
     prior_tokens = [set(entry) for entry in prior]
     for story in stories:
         candidates += 1
-        tokens = _title_tokens(story.title, topic)
+        tokens = _title_tokens(story.fingerprint_title if story.fingerprint_title is not None else story.title, topic)
         twin = _is_near_duplicate(tokens, seen_tokens)
         if twin is not None:
-            # 同一件事再講一次:不佔位置,但它的來源是額外證據,掛到前一則上
+            # Only title similarity: additional platform names are not corroboration.
             near_duplicates += 1
             extra = tuple(
                 s for s in story.sources if s not in items[twin].sources and s not in items[twin].also
@@ -480,10 +509,7 @@ def _meta_line(story: Story, range_to: str) -> str:
         parts.append("另見 " + "、".join(story.also))
     if story.engagement:
         parts.append(story.engagement)
-    corroborated = len(story.sources) + len(story.also) >= 2
-    if corroborated:
-        parts.append("多來源交叉")
-    elif story.uncertainty in _UNCERTAINTY_LABEL:
+    if story.uncertainty in _UNCERTAINTY_LABEL:
         parts.append(_UNCERTAINTY_LABEL[story.uncertainty])
     return "📅 " + " · ".join(parts)
 
@@ -501,10 +527,21 @@ def _render_story(index: int, story: Story, range_to: str, *, with_quote: bool =
     return "\n".join(lines)
 
 
-def _render_head(head: Head, topic: str) -> str:
+def _run_now() -> datetime.datetime:
+    return datetime.datetime.now(datetime.timezone.utc)
+
+
+def _render_head(head: Head, topic: str, now: datetime.datetime | None = None) -> str:
     name = topic or head.topic or "這題"
-    first = f"📰 {name}" + (f" · {head.range_to} 早報" if head.range_to else " · 早報")
-    window = f"觀察窗 {head.range_from} → {head.range_to}" if head.range_from and head.range_to else ""
+    instant = now if now is not None else _run_now()
+    if instant.tzinfo is None:
+        raise ValueError("run time must be timezone-aware")
+    # Current Taipei civil time is UTC+08:00, including year boundaries.
+    # An explicit timezone avoids requiring an external tzdata install on Windows.
+    taipei = datetime.timezone(datetime.timedelta(hours=8), "Asia/Taipei")
+    day = instant.astimezone(taipei).date().isoformat()
+    first = f"📰 {name} · {day} 早報"
+    window = f"觀察窗 {head.range_from} → {head.range_to} (UTC)" if head.range_from and head.range_to else ""
     sources = "有回應的來源:" + ("、".join(head.sources) if head.sources else "無")
     second = " · ".join(p for p in (window, sources) if p)
     return f"{first}\n{second}"
@@ -522,7 +559,7 @@ def _shortfall_note(
     # 半殘」的差別。不講數字,連續幾天只有一條也不會有人察覺。
     reasons = [f"候選 {candidates} 條"]
     if near_duplicates:
-        reasons.append(f"{near_duplicates} 條是同一件事、已併入")
+        reasons.append(f"{near_duplicates} 條標題相近、已併入")
     if repeats:
         reasons.append(f"{repeats} 條近 {SEEN_WINDOW_DAYS} 天送過")
     if dropped:
@@ -530,10 +567,16 @@ def _shortfall_note(
     return f"ℹ️ 今天只有 {shown}/{MAX_ITEMS} 條新的({','.join(reasons)})。"
 
 
-def _empty_note(topic: str, head: Head, candidates: int, repeats: int) -> str:
+def _empty_note(topic: str, head: Head, candidates: int, repeats: int, dropped: int = 0) -> str:
     # 這題沒東西時要講清楚是「這題沒抓到」,不是系統掛了 ——
     # owner 靠這句分辨「來源沒回應」跟「早報壞掉」,沉默兩者長得一樣
     label = f"「{topic or head.topic}」" if (topic or head.topic) else "這題"
+    if head.input_state == "invalid-report":
+        return f"⚠️ {label}早報 Report 結構解析失敗，請查看執行紀錄。"
+    if head.input_state == "incomplete":
+        return f"⚠️ {label}早報輸入空白或殘缺，無法判斷來源結果。"
+    if dropped:
+        return f"⚠️ {label}有資料，但篇幅放不下。"
     if repeats:
         # 抓到了,只是全都送過。講成「來源沒回應」是錯的診斷,而錯的診斷
         # 會讓人去查一個沒有壞掉的東西。
@@ -541,7 +584,9 @@ def _empty_note(topic: str, head: Head, candidates: int, repeats: int) -> str:
             f"📭 {label}今天沒有新東西"
             f"(候選 {candidates} 條,{repeats} 條近 {SEEN_WINDOW_DAYS} 天都送過)。"
         )
-    return f"⚠️ {label}這次沒抓到內容(來源可能全部無回應)。"
+    if head.sources:
+        return f"📭 {label}有資料，但沒有符合選條條件的內容。"
+    return f"📭 {label}觀察窗內沒有內容。"
 
 
 def shape_stories(
@@ -549,6 +594,8 @@ def shape_stories(
     stories: list[Story],
     topic: str = "",
     prior: tuple[frozenset[str], ...] = (),
+    *,
+    now: datetime.datetime | None = None,
 ) -> Shaped:
     """Head + Story 清單 → 一封訊息。訊息永遠非空、永遠在預算內、尾巴永遠是 FOOTER。
 
@@ -557,7 +604,7 @@ def shape_stories(
     """
     items, candidates, near_duplicates, repeats, shipped = _select(stories, topic, prior)
     limit = BUDGET - len(FOOTER) - 2
-    header = _render_head(head, topic)
+    header = _render_head(head, topic, now)
     with_quote = [True] * len(items)
     dropped = 0
 
@@ -570,7 +617,7 @@ def shape_stories(
         if items and (len(items) < MAX_ITEMS or dropped):
             tail.append(_shortfall_note(len(items), candidates, near_duplicates, repeats, dropped))
         elif not items:
-            tail.append(_empty_note(topic, head, candidates, repeats))
+            tail.append(_empty_note(topic, head, candidates, repeats, dropped))
         if dropped:
             tail.append(f"{TRUNCATED_MARK}:篇幅已滿,略過 {dropped} 條)")
         body = "\n\n".join([header, *blocks, *tail])
@@ -598,6 +645,9 @@ def shape_stories(
         repeats=repeats,
         shipped=tuple(frozenset(t) for t in shipped),
         dropped_for_budget=dropped,
+        input_state=head.input_state,
+        input_error=head.input_error,
+        responsive_sources=bool(head.sources),
     )
 
 
@@ -605,19 +655,23 @@ def shape_report(
     report: schema.Report,
     topic: str = "",
     prior: tuple[frozenset[str], ...] = (),
+    *,
+    now: datetime.datetime | None = None,
 ) -> Shaped:
     head, stories = stories_from_report(report)
-    return shape_stories(head, stories, topic, prior)
+    return shape_stories(head, stories, topic, prior, now=now)
 
 
 def shape(
     raw: str,
     topic: str = "",
     prior: tuple[frozenset[str], ...] = (),
+    *,
+    now: datetime.datetime | None = None,
 ) -> Shaped:
     """原始輸入(JSON 或 brief 文字)→ 一封訊息,附上決定它長相的數字。"""
     head, stories = parse_input(raw)
-    return shape_stories(head, stories, topic, prior)
+    return shape_stories(head, stories, topic, prior, now=now)
 
 
 def build_message(raw: str, topic: str = "") -> str:
@@ -721,13 +775,19 @@ def main(argv: list[str]) -> int:
         raw = ""
 
     shaped = shape(raw, topic, load_seen(args.seen, args.window))
-    save_seen(args.seen, shaped.shipped, args.window)
+    if shaped.input_state == "valid":
+        save_seen(args.seen, shaped.shipped, args.window)
 
     # Telegram 那封會被滑掉,run 上的 annotation 不會。GitHub 會從 stderr 解析
     # 這種 workflow command,所以這裡不需要動 workflow —— 而且 stdout 是訊息
     # 本體,不能混東西進去。
     label = topic or "(未指定主題)"
-    if shaped.items == 0 and shaped.candidates > shaped.near_duplicates + shaped.repeats:
+    detail = f"「{label}」{shaped.input_error}".replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+    if shaped.input_state == "invalid-report":
+        print(f"::error title=daily-brief Report 結構解析失敗::{detail}", file=sys.stderr)
+    elif shaped.input_state == "incomplete":
+        print(f"::warning title=daily-brief 輸入空白或殘缺::{detail}", file=sys.stderr)
+    elif shaped.items == 0 and shaped.dropped_for_budget:
         print(
             f"::warning title=daily-brief 截斷::「{label}」候選 {shaped.candidates} 條,"
             "沒有完整條目能放進字數上限",
@@ -740,7 +800,8 @@ def main(argv: list[str]) -> int:
             file=sys.stderr,
         )
     elif shaped.items == 0:
-        print(f"::warning title=daily-brief 乾涸::「{label}」這次沒抓到任何內容", file=sys.stderr)
+        diagnosis = "有資料，但沒有符合選條條件的內容" if shaped.responsive_sources else "觀察窗內沒有內容"
+        print(f"::warning title=daily-brief 空結果::「{label}」{diagnosis}", file=sys.stderr)
     elif shaped.items < MAX_ITEMS:
         print(
             f"::warning title=daily-brief 缺條目::「{label}」只取到 "

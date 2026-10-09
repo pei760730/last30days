@@ -1,0 +1,132 @@
+{
+  "notice": "Synthetic input. Fingerprints emitted by exact historical formatters; no production cache was read.",
+  "refs": {
+    "main": "98a5ef4634e66e5f6a26f3c3595f05b8eefa0df2",
+    "58": "6e14897224158e9ad0da38ef629d26c4afe5470d",
+    "60": "9d6d8c0507cb4b3b1093a96999b025333ec18c2f"
+  },
+  "examples": [
+    {
+      "title": "Palantir P/E < 100 but revenue > $1B, bulls say",
+      "fingerprints": {
+        "main": [
+          [
+            "100",
+            "1b",
+            "bulls",
+            "but",
+            "revenue",
+            "say"
+          ]
+        ],
+        "58": [
+          [
+            "100",
+            "1b",
+            "bulls",
+            "but",
+            "revenue",
+            "say"
+          ]
+        ],
+        "60": [
+          [
+            "1b",
+            "bulls",
+            "say"
+          ]
+        ]
+      }
+    },
+    {
+      "title": "Read Palantir at https://example.invalid/report",
+      "fingerprints": {
+        "main": [
+          [
+            "example",
+            "https",
+            "invalid",
+            "read",
+            "report"
+          ]
+        ],
+        "58": [
+          [
+            "example",
+            "https",
+            "invalid",
+            "read",
+            "report"
+          ]
+        ],
+        "60": [
+          [
+            "read"
+          ]
+        ]
+      }
+    },
+    {
+      "title": "Palantir <b>revenue</b> exceeds $1B",
+      "fingerprints": {
+        "main": [
+          [
+            "1b",
+            "exceeds",
+            "revenue"
+          ]
+        ],
+        "58": [
+          [
+            "1b",
+            "exceeds",
+            "revenue"
+          ]
+        ],
+        "60": [
+          [
+            "1b",
+            "exceeds",
+            "revenue"
+          ]
+        ]
+      }
+    },
+    {
+      "title": "Palantir I&#39;ve seen revenue growth &amp; progress",
+      "fingerprints": {
+        "main": [
+          [
+            "39",
+            "amp",
+            "growth",
+            "progress",
+            "revenue",
+            "seen",
+            "ve"
+          ]
+        ],
+        "58": [
+          [
+            "39",
+            "amp",
+            "growth",
+            "progress",
+            "revenue",
+            "seen",
+            "ve"
+          ]
+        ],
+        "60": [
+          [
+            "growth",
+            "progress",
+            "revenue",
+            "seen",
+            "ve"
+          ]
+        ]
+      }
+    }
+  ]
+}
