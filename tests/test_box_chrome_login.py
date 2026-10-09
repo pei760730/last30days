@@ -123,7 +123,7 @@ def test_default_run_prints_but_does_not_spawn():
 
 
 def _skill():
-    return SKILL.read_text()
+    return SKILL.read_text(encoding="utf-8")
 
 
 def test_skill_md_references_helper_in_flows_and_repair():
