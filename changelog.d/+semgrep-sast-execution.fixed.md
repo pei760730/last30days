@@ -1,0 +1,1 @@
+The advisory Semgrep SAST job now actually scans: it uses the `p/default` ruleset with metrics off (the previous `--config=auto` was rejected by Semgrep and exited 2 while `continue-on-error` kept the job green), reports findings without blocking, and fails visibly when the scan does not complete.
