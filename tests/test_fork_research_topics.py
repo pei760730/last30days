@@ -1,8 +1,9 @@
 """Fork-local guard: a typo in research-topics.txt must not silently kill a topic.
 
-`daily-brief.yml` runs the CLI as `python "$CLI" "$t" --emit brief $flags || true`.
+`daily-brief.yml` runs the CLI as
+`python "$CLI" "$t" --emit json --json-profile raw $flags || true`.
 An unknown `--search` source makes `parse_search_flag` raise `SystemExit`, the
-`|| true` swallows it, `brief.txt` comes out empty, and the topic ships as
+`|| true` swallows it, `report.json` comes out empty, and the topic ships as
 "⚠️ 這次沒抓到內容(來源可能全部無回應)" — every morning, looking exactly like a
 quiet upstream outage. Nothing else in CI reads this file, so a one-character
 mistake could run for weeks.

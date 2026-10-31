@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import json
 import importlib.util
+import re
 import sys
+import datetime
 from pathlib import Path
 
 import pytest
@@ -23,6 +25,11 @@ assert _spec and _spec.loader
 btm = importlib.util.module_from_spec(_spec)
 sys.modules["fork_brief_to_message"] = btm
 _spec.loader.exec_module(btm)
+
+
+@pytest.fixture(autouse=True)
+def _fixed_execution_clock(monkeypatch):
+    monkeypatch.setattr(btm, "_run_now", lambda: datetime.datetime(2026, 10, 8, 23, tzinfo=datetime.timezone.utc))
 
 
 BRIEF = """# Production Brief: Palantir PLTR
@@ -55,8 +62,8 @@ BRIEF = """# Production Brief: Palantir PLTR
 
 def test_keeps_header_and_first_three_items():
     msg = btm.build_message(BRIEF, "Palantir PLTR")
-    assert "# Production Brief: Palantir PLTR" in msg
-    assert "Date range: 2026-07-26 to 2026-08-25" in msg
+    assert msg.startswith("📰 Palantir PLTR")
+    assert "2026-07-26 → 2026-08-25" in msg
     for n in ("First", "Second", "Third"):
         assert f"{n} headline" in msg
     # 第 4 條超出 MAX_ITEMS,不該出現
@@ -95,8 +102,8 @@ def test_empty_brief_says_which_topic_was_empty():
 def test_no_storylines_keeps_header_and_warns():
     raw = "# Production Brief: T\n\n- Sources: 0 active\n\n## Ranked Storylines\n"
     msg = btm.build_message(raw, "T")
-    assert "# Production Brief: T" in msg
-    assert "沒抓到內容" in msg
+    assert msg.startswith("📰 T")
+    assert "觀察窗內沒有內容" in msg
 
 
 def test_footer_survives_truncation():
@@ -104,15 +111,15 @@ def test_footer_survives_truncation():
     raw = "# Production Brief: T\n\n## Ranked Storylines\n" + "".join(
         f"\n### {i}. Head {i} (score 1, Reddit)\n- {'y' * btm.SNIPPET}\n" for i in range(1, 4)
     )
-    # 把預算壓到必定截斷
+    # 把預算壓到連一條都放不下(只丟引文還救得回來的話,不算截斷)
     original = btm.BUDGET
     try:
-        btm.BUDGET = 120
+        btm.BUDGET = 60
         msg = btm.build_message(raw, "T")
     finally:
         btm.BUDGET = original
     assert msg.endswith(btm.FOOTER)
-    assert "…(截斷)" in msg
+    assert btm.TRUNCATED_MARK in msg
 
 
 def test_output_stays_within_budget():
@@ -273,7 +280,12 @@ def test_kept_items_are_renumbered_contiguously():
         _brief(_EARNINGS_A, _EARNINGS_B, "Britain would be bonkers to ditch Palantir (score 42, Hacker News)"),
         "Palantir PLTR",
     )
-    assert [line.split(".")[0] for line in msg.splitlines() if line.startswith("### ")] == ["### 1", "### 2"]
+    assert _numbers(msg) == ["1", "2"]
+
+
+def _numbers(msg: str) -> list[str]:
+    """訊息裡 storyline 的編號(`1. 標題` 那種行)。"""
+    return [m.group(1) for m in re.finditer(r"^(\d+)\. ", msg, flags=re.MULTILINE)]
 
 
 # ── 訊息要說出「為什麼今天只有這麼少條」 ──────────────────────────────────
@@ -288,7 +300,7 @@ def test_full_message_says_nothing_about_counts():
 
 def test_short_message_reports_candidate_count():
     msg = btm.build_message(_brief("Only one here"), "Palantir PLTR")
-    assert "只取到 1/3 條" in msg
+    assert "只有 1/3 條新的" in msg
     assert "候選 1 條" in msg
 
 
@@ -302,7 +314,7 @@ def test_short_message_blames_deduplication_when_that_is_the_cause():
     assert shaped.items == 1
     assert shaped.candidates == 2
     assert shaped.near_duplicates == 1
-    assert "近乎重述" in shaped.message
+    assert "標題相近、已併入" in shaped.message
 
 
 def test_candidates_are_counted_past_the_three_that_ship():
@@ -436,7 +448,7 @@ def test_final_render_keeps_budget_and_only_caches_visible_titles(tmp_path, caps
     assert shaped.items == 1
     assert shaped.shipped == (frozenset({titles[0]}),)
     assert titles[0] in shaped.message
-    assert "### 2." not in shaped.message
+    assert _numbers(shaped.message) == ["1"]
 
     brief = tmp_path / "brief.txt"
     brief.write_text(raw, encoding="utf-8")
@@ -458,34 +470,62 @@ def test_final_render_keeps_budget_and_only_caches_visible_titles(tmp_path, caps
     assert titles[1] in next_day.message
 
 
-@pytest.mark.parametrize("cut", ["header", "before_title", "inside_title", "title_end", "quote", "exact_fit"])
+@pytest.mark.parametrize("cut", ["exact_fit", "one_under", "no_room_for_third", "no_room_for_second", "header_only"])
 def test_final_render_boundaries_keep_counts_and_fingerprints_in_sync(monkeypatch, cut):
-    titles = ("Mars colony expands", "Vaccine trial succeeds", "Ocean currents reverse")
-    raw = _brief(*(f"{title} (score 50, Reddit)" for title in titles))
+    """篇幅不夠時只整條退讓(先丟引文、再丟整條),永遠不切半條;
+    訊息裡看得到幾條、`items` 就是幾、`shipped` 就記幾條 —— 三者永遠同步(#58 的契約)。"""
+    # 長度要像真的:一條沒引文的 storyline(標題 + 日期行)必須比「只有 N 條」
+    # 的說明加截斷標記還長,否則丟掉第三條之後它又塞得回去,測的就不是邊界了。
+    titles = (
+        "Mars colony expands beyond the first dome after a long and brutal winter season",
+        "Vaccine trial succeeds in every age group across all three continents studied",
+        "Ocean currents reverse direction for the first time in recorded human history",
+    )
+    bodies = tuple(f"body {i} " + "x" * 150 for i in range(1, 4))
+    raw = "# Production Brief: T\n\n## Ranked Storylines\n" + "".join(
+        f"\n### {i}. {t} (score 50, Reddit)\n- {b}\n" for i, (t, b) in enumerate(zip(titles, bodies), 1)
+    )
     full = btm.shape(raw, "T")
-    second_start = full.message.index("### 2.")
-    second_end = full.message.index("\n", second_start)
-    cut_at = {
-        "header": 5,
-        "before_title": second_start,
-        "inside_title": second_start + 12,
-        "title_end": second_end,
-        "quote": second_end + 4,
-    }
-    budget = len(full.message) if cut == "exact_fit" else cut_at[cut] + len(" …(截斷)\n\n" + btm.FOOTER)
+    third_start = full.message.index("3. Ocean")
+    second_start = full.message.index("2. Vaccine")
+
+    def _fits_without(start: int, shown: int) -> int:
+        # 從第 shown+1 條的起點切掉,換成「只有 N 條」的說明與截斷標記,再留
+        # 8 個字的餘裕 —— 比任何一條沒引文的 storyline 都短,所以塞不回去
+        tail = "\n\n" + btm._shortfall_note(shown, 3, 0, 0, 3 - shown)
+        tail += "\n\n" + btm.TRUNCATED_MARK + f":篇幅已滿,略過 {3 - shown} 條)"
+        return (start - 2) + len(tail) + 2 + len(btm.FOOTER) + 8
+
+    budget = {
+        "exact_fit": len(full.message),
+        "one_under": len(full.message) - 1,
+        "no_room_for_third": _fits_without(third_start, 2),
+        "no_room_for_second": _fits_without(second_start, 1),
+        "header_only": 60 + len(btm.FOOTER),
+    }[cut]
     monkeypatch.setattr(btm, "BUDGET", budget)
     shaped = btm.shape(raw, "T")
-    visible = [title for title in titles if title + " (score 50, Reddit)" in shaped.message]
-    expected_count = {"header": 0, "before_title": 1, "inside_title": 1, "title_end": 2, "quote": 2, "exact_fit": 3}[cut]
+    visible = [title for title in titles if title in shaped.message]
+    expected_count = {"exact_fit": 3, "one_under": 3, "no_room_for_third": 2, "no_room_for_second": 1, "header_only": 0}[cut]
     assert len(shaped.message) <= budget
     assert shaped.message.endswith(btm.FOOTER)
     assert len(visible) == shaped.items == expected_count
-    assert shaped.shipped == tuple(frozenset(title.lower().split()) for title in visible)
-    assert sum(line.startswith("### ") for line in shaped.message.splitlines()) == expected_count
+    assert shaped.shipped == tuple(frozenset(btm._title_tokens(title, "T")) for title in visible)
+    assert _numbers(shaped.message) == [str(i + 1) for i in range(expected_count)]
+    # 沒有半條:每一條留下來的標題行都完整
+    for title in visible:
+        assert re.search(rf"^\d+\. {re.escape(title)}$", shaped.message, flags=re.MULTILINE)
     if cut == "exact_fit":
         assert shaped.message == full.message
+        assert shaped.dropped_for_budget == 0
+    elif cut == "one_under":
+        # 差一個字:最後一條的引文讓位,條目與指紋都還在
+        assert shaped.dropped_for_budget == 0
+        assert f"「{bodies[2]}」" not in shaped.message
+        assert f"「{bodies[1]}」" in shaped.message
     else:
-        assert "…(截斷)" in shaped.message
+        assert btm.TRUNCATED_MARK in shaped.message
+        assert shaped.dropped_for_budget == 3 - expected_count
 
 
 def _upstream_brief(*titles: str, uncertainty: str | None = None) -> str:
@@ -565,3 +605,293 @@ def test_no_complete_title_warns_about_truncation_not_sources_or_repeats(tmp_pat
     assert "全部" not in captured.err
     assert "沒抓到" not in captured.err
     assert btm.load_seen(str(state)) == prior
+
+
+# ══ JSON(raw Report)路徑:cron 現在走這條 ═══════════════════════════════
+# 情境資料全是合成的(tests/_fork_brief_scenarios.py 開頭有說明),只用來測排版與邊界。
+
+from _fork_brief_scenarios import HOLDOUTS, SCENARIOS, Scenario, Spec, build_report, by_name, report_for
+
+_ALL_SCENARIOS = SCENARIOS + HOLDOUTS
+
+
+def _raw(scenario: Scenario) -> str:
+    """跟 workflow 餵給 formatter 的東西一模一樣:`--emit json --json-profile raw` 的輸出。"""
+    return json.dumps(schema.to_dict(report_for(scenario)), indent=2, sort_keys=True)
+
+
+def _prior(scenario: Scenario) -> tuple[frozenset[str], ...]:
+    return tuple(frozenset(btm._title_tokens(t, scenario.topic)) for t in scenario.prior_titles)
+
+
+def _shape(name: str):
+    scenario = by_name(name)
+    return btm.shape(_raw(scenario), scenario.topic, _prior(scenario))
+
+
+def _story_blocks(msg: str) -> list[list[str]]:
+    """訊息裡每條 storyline 的行(從 `N. 標題` 到下一個空行)。"""
+    blocks: list[list[str]] = []
+    current: list[str] | None = None
+    for line in msg.splitlines():
+        if re.match(r"^\d+\. ", line):
+            current = [line]
+            blocks.append(current)
+        elif not line.strip():
+            current = None
+        elif current is not None:
+            current.append(line)
+    return blocks
+
+
+@pytest.mark.parametrize("scenario", _ALL_SCENARIOS, ids=lambda s: s.name)
+def test_scenario_message_keeps_the_reading_contract(scenario):
+    """每一組情境都要守住:預算內、頁尾在、編號連續、每條有標題行+日期行、
+    沒有 score/active/### 那種工程展示;items 與指紋數同步。"""
+    shaped = btm.shape(_raw(scenario), scenario.topic, _prior(scenario))
+    msg = shaped.message
+    assert len(msg) <= btm.BUDGET
+    assert msg.endswith(btm.FOOTER)
+    assert msg.startswith(f"📰 {scenario.topic} · 2026-10-09 早報")
+    assert f"觀察窗 {scenario.range_from} → {scenario.range_to}" in msg
+    for noise in ("(score", "###", " active", "_Why", "Safety note", "Production Brief"):
+        assert noise not in msg, noise
+    assert _numbers(msg) == [str(i + 1) for i in range(shaped.items)]
+    assert len(shaped.shipped) == shaped.items
+    blocks = _story_blocks(msg)
+    assert len(blocks) == shaped.items
+    for block in blocks:
+        assert block[1].startswith("📅 ") and "發布" in block[1]
+        # 標題行完整:等於某條候選的完整標題
+        title = re.sub(r"^\d+\. ", "", block[0])
+        assert any(btm._clean(spec.title) == title for spec in scenario.specs), title
+
+
+@pytest.mark.parametrize("scenario", _ALL_SCENARIOS, ids=lambda s: s.name)
+def test_json_path_sees_exactly_the_storylines_upstream_brief_would_print(scenario):
+    """選條契約:JSON 路徑看到的候選 == 上游 render_brief 印出來的 Ranked Storylines。"""
+    report = report_for(scenario)
+    _head, stories = btm.stories_from_report(report)
+    headings = [
+        re.sub(r"^###\s*\d+\.\s*", "", line)
+        for line in render.render_brief(report).splitlines()
+        if line.startswith("### ")
+    ]
+    assert [s.title for s in stories] == [btm._clean(btm._HEADING_SUFFIX.sub("", h)) for h in headings]
+
+
+@pytest.mark.parametrize("scenario", _ALL_SCENARIOS, ids=lambda s: s.name)
+def test_json_and_text_paths_write_identical_fingerprints(scenario):
+    """seen cache 契約(#48/#58):兩條輸入路徑對同一份資料記下同一組指紋,
+    所以切換 cron 的輸入格式那天,昨天的 cache 照樣認得出今天的重複。"""
+    report = report_for(scenario)
+    via_json = btm.shape(_raw(scenario), scenario.topic, _prior(scenario))
+    via_text = btm.shape(render.render_brief(report), scenario.topic, _prior(scenario))
+    assert via_json.shipped == via_text.shipped
+    assert (via_json.items, via_json.candidates, via_json.near_duplicates, via_json.repeats) == (
+        via_text.items,
+        via_text.candidates,
+        via_text.near_duplicates,
+        via_text.repeats,
+    )
+
+
+def test_text_path_admits_it_has_no_dates_or_links():
+    """brief 文字沒有日期與連結:寫「不明」、不印 🔗,不補猜。"""
+    msg = btm.build_message(BRIEF, "Palantir PLTR")
+    assert msg.count("發布日期不明") == 3
+    assert "🔗" not in msg
+
+
+def test_dates_are_shown_only_as_confident_as_the_source_gave_them():
+    msg = _shape("partial_dates").message
+    blocks = _story_blocks(msg)
+    assert "📅 發布日期不明" in blocks[0][1]
+    assert "📅 發布約 10-02" in blocks[1][1]
+    assert "📅 發布 10-06" in blocks[2][1]
+    # 日期永遠標「發布」,因為引擎只知道發布日,不知道事件日 —— 不冒充事件日期
+    assert "事件" not in msg
+
+
+def test_sources_engagement_and_link_follow_the_event():
+    shaped = _shape("full_pltr")
+    msg = shaped.message
+    assert shaped.items == 3
+    first = _story_blocks(msg)[0]
+    assert first[0].endswith("European rail operator")
+    assert "Hacker News + Reddit" in first[1]
+    assert "310 讚 · 140 留言" in first[1]
+    assert "多來源交叉" not in first[1]
+    assert first[2].startswith("「The operator said")
+    assert first[3].startswith("🔗 https://example.invalid/hackernews/1-palantir-signs-a-synthetic")
+    assert "有回應的來源:Hacker News、Polymarket、Reddit" in msg
+    # Polymarket 那條沒互動數也沒引文,就只有標題、日期、連結
+    third = _story_blocks(msg)[2]
+    assert third[1] == "📅 發布 10-06 · Polymarket"
+    assert third[2].startswith("🔗 ")
+
+
+def test_same_event_from_two_sources_folds_into_one_line_with_the_extra_source():
+    shaped = _shape("same_event_two_sources")
+    msg = shaped.message
+    assert shaped.items == 2
+    assert shaped.near_duplicates == 1
+    assert "JUST IN" not in msg
+    first = _story_blocks(msg)[0]
+    assert "Hacker News" in first[1] and "另見 Reddit" in first[1] and "多來源交叉" not in first[1]
+    assert "Britain would be bonkers" in msg
+    assert "標題相近、已併入" in msg
+
+
+def test_distinct_events_about_the_same_person_stay_separate():
+    shaped = _shape("distinct_events")
+    assert shaped.items == 3
+    assert shaped.near_duplicates == 0
+    assert "opened a new short position" in shaped.message
+    assert "under $1 over the long run" in shaped.message
+
+
+def test_single_source_storylines_carry_the_qualifier():
+    shaped = _shape("single_source_only")
+    blocks = _story_blocks(shaped.message)
+    assert len(blocks) == 3
+    assert all("單一來源,待證" in b[1] for b in blocks)
+
+
+def test_yesterdays_event_is_skipped_but_todays_development_ships():
+    shaped = _shape("multi_day_updates")
+    assert shaped.repeats == 1
+    assert shaped.items == 2
+    assert "Same story as yesterday" not in shaped.message
+    assert "GM confirms it received the first MP magnets" in shaped.message
+    assert "DoD price floor" in shaped.message
+    assert "1 條近 7 天送過" in shaped.message
+
+
+def test_long_titles_ship_whole_or_not_at_all():
+    scenario = by_name("long_titles")
+    shaped = btm.shape(_raw(scenario), scenario.topic)
+    assert shaped.items == 3
+    for spec in scenario.specs:
+        assert re.search(rf"^\d+\. {re.escape(spec.title)}$", shaped.message, flags=re.MULTILINE)
+
+
+def test_cjk_titles_are_neither_merged_nor_mangled():
+    scenario = by_name("mixed_cjk")
+    shaped = btm.shape(_raw(scenario), scenario.topic)
+    assert shaped.items == 3
+    assert shaped.near_duplicates == 0
+    for spec in scenario.specs:
+        assert spec.title in shaped.message
+    assert "每三張就有一張寬版褲" in shaped.message
+
+
+def test_sparse_topic_says_so_without_inventing_a_quote():
+    shaped = _shape("sparse")
+    assert shaped.items == 1
+    assert "只有 1/3 條新的" in shaped.message
+    assert "「" not in shaped.message
+
+
+def test_over_budget_drops_whole_storylines_and_keeps_links_intact():
+    scenario = by_name("over_budget")
+    shaped = btm.shape(_raw(scenario), scenario.topic)
+    msg = shaped.message
+    assert len(msg) <= btm.BUDGET
+    assert shaped.dropped_for_budget >= 1
+    assert shaped.items + shaped.dropped_for_budget == 3
+    assert btm.TRUNCATED_MARK in msg
+    assert f"略過 {shaped.dropped_for_budget} 條" in msg
+    for block in _story_blocks(msg):
+        title = re.sub(r"^\d+\. ", "", block[0])
+        spec = next(s for s in scenario.specs if s.title == title)
+        assert spec.url and f"🔗 {spec.url}" in block  # 連結整條在,沒被切半
+    # 被略過的那幾條沒進指紋,明天還有機會
+    assert len(shaped.shipped) == shaped.items
+
+
+# ── 6 組保留情境(實作定稿後才寫,沒拿來調整實作) ──────────────────────
+
+
+def test_holdout_thin_evidence_keeps_the_qualifier_without_claiming_corroboration():
+    blocks = _story_blocks(_shape("thin_evidence").message)
+    assert "證據薄弱" in blocks[0][1]
+    assert "Hacker News + Reddit" in blocks[1][1] and "多來源交叉" not in blocks[1][1]
+
+
+def test_holdout_html_entities_and_boilerplate_are_scrubbed():
+    msg = _shape("html_entities").message
+    assert "why I've stopped buying \"raw denim\"" in msg
+    assert "It's just not worth" in msg
+    for junk in ("&#39;", "&quot;", "<b>", "submitted by", "[link]", "tracking"):
+        assert junk not in msg
+
+
+def test_holdout_quote_that_echoes_title_is_not_printed_twice():
+    msg = _shape("quote_echoes_title").message
+    assert msg.count("Palantir opens a Tokyo office") == 1
+    assert "「" not in msg
+
+
+def test_holdout_cross_year_dates_keep_the_year_when_it_differs():
+    blocks = _story_blocks(_shape("cross_year").message)
+    assert "📅 發布 2025-12-30" in blocks[0][1]
+    assert "📅 發布 01-05" in blocks[1][1]
+
+
+def test_holdout_missing_url_means_no_link_line():
+    msg = _shape("url_missing").message
+    assert "🔗" not in msg
+    assert "a source that gave us no link" in msg
+
+
+def test_holdout_three_sources_on_one_event_fold_into_one_line():
+    shaped = _shape("three_way_duplicate")
+    assert shaped.items == 2
+    assert shaped.near_duplicates == 2
+    first = _story_blocks(shaped.message)[0]
+    assert "另見 Reddit、X" in first[1]
+    assert "names a new CFO" in shaped.message
+
+
+# ── 輸入壞掉與 CLI 端到端 ─────────────────────────────────────────────────
+
+
+def test_title_that_is_only_a_link_is_not_scrubbed_to_nothing():
+    """引文裡的裸網址會被洗掉;標題只有網址時那個網址就是標題,不能洗成空字串。"""
+    report = build_report("T", (Spec("https://example.invalid/only-a-link", "", ("reddit",), "2026-10-05"),))
+    shaped = btm.shape(json.dumps(schema.to_dict(report)), "T")
+    assert shaped.items == 1
+    assert "1. https://example.invalid/only-a-link" in shaped.message
+    assert "(無標題)" not in shaped.message
+
+
+def test_corrupt_json_is_reported_as_incomplete_input():
+    """引擎半路掛掉留下殘缺 JSON:明示輸入殘缺,不猜來源結果。"""
+    shaped = btm.shape('{"topic": "T", "ranked_candidates": [', "T")
+    assert shaped.items == 0 and shaped.candidates == 0
+    assert "輸入空白或殘缺" in shaped.message
+
+
+def test_cli_reads_a_json_report_and_remembers_what_it_shipped(tmp_path, capsys, monkeypatch):
+    scenario = by_name("full_mp")
+    report = tmp_path / "report.json"
+    report.write_text(_raw(scenario), encoding="utf-8")
+    state = tmp_path / "seen.json"
+    monkeypatch.setattr(btm, "_today", lambda: "2026-10-08")
+    monkeypatch.setattr(btm, "_cutoff", lambda window: "2026-10-01")
+    assert btm.main(["brief_to_message.py", str(report), scenario.topic, "--seen", str(state)]) == 0
+    first = capsys.readouterr()
+    assert first.out.startswith("📰 MP Materials rare earth · 2026-10-09 早報")
+    assert "🔗 https://example.invalid/" in first.out
+    assert first.err == ""  # 滿三條不該有 annotation
+    assert len(btm.load_seen(str(state))) == 3
+
+    # 第二天同一份資料:前三條都送過了,遞補第四條(Hancock),並說明三條是舊的
+    assert btm.main(["brief_to_message.py", str(report), scenario.topic, "--seen", str(state)]) == 0
+    second = capsys.readouterr()
+    assert _numbers(second.out) == ["1"]
+    assert "Hancock Prospecting" in second.out
+    assert "3 條近 7 天送過" in second.out
+    assert "::warning" in second.err and "跨日重複 3 條" in second.err
+    assert len(btm.load_seen(str(state))) == 4

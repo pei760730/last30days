@@ -156,15 +156,22 @@ jobs:
 
           # stderr 進 step log(診斷線索),fail-soft 語意不變
           # flags 故意不加引號:要讓 shell 做詞彙切分才會變成多個參數
+          #
+          # 走完整 Report(raw JSON)而不是 `--emit brief` 文字:brief 文字只有標題
+          # 與引文,沒有每條的發布日期、來源明細、原文連結 —— 早報要讀得出
+          # 「這是哪天的事、誰在講、去哪看原文」就得拿到結構化資料。選哪幾條、
+          # 怎麼排,brief_to_message.py 沿用上游 render_brief 同一套規則,研究策略不變。
           # shellcheck disable=SC2086
-          python "$CLI" "$t" --emit brief $flags > brief.txt || true
+          python "$CLI" "$t" --emit json --json-profile raw $flags > report.json || true
 
-          # brief.txt → 一封可讀的 Telegram 訊息(邏輯在 tools/brief_to_message.py,
-          # 放檔案而不是塞 python -c:這段有分支有迴圈,inline 會沒法測)
+          # report.json → 一封可讀的 Telegram 訊息(邏輯在 tools/brief_to_message.py,
+          # 放檔案而不是塞 python -c:這段有分支有迴圈,inline 會沒法測)。
+          # JSON 殘缺時明示輸入殘缺;Report 結構不符時給 error annotation。
+          # 兩者都不更新 seen,也不冒充來源全部無回應。
           # --seen:記住最近 7 天送過哪些標題。2026-09-04 量到 MP Materials 的
           # 前三條在 09-02/03/04 逐字相同 —— 每天都是全新 runner,引擎沒有任何
           # 辦法知道昨天送過什麼。狀態檔壞掉或不存在時就退回原本的行為。
-          python tools/brief_to_message.py brief.txt "$t" \
+          python tools/brief_to_message.py report.json "$t" \
             --seen ".brief-state/seen.json" > message.md
 
           {
