@@ -186,8 +186,9 @@ def test_paths_cannot_inject_summary_headings_or_markdown(tmp_path, monkeypatch,
 
 
 def test_undecodable_file_name_still_reports(tmp_path, monkeypatch, capsys):
-    # json.loads cannot produce this, but a lone surrogate is what Python-side
-    # tooling yields for a non-UTF-8 file name; it must not crash the summary.
+    # A lone surrogate (what Python-side tooling yields for a non-UTF-8 file
+    # name, and what json.loads returns for a "\udcff" escape) must not crash
+    # the summary write.
     surrogate = {"check_id": "r", "path": "bad\udcffname.py", "start": {"line": 1}}
     code, out, text = _run_main(tmp_path, monkeypatch, capsys, [surrogate])
     assert code == 0
