@@ -36,7 +36,7 @@ def test_findings_are_advisory():
     status, lines = mod.classify(0, _report(results=[FINDING]))
     assert status == mod.FINDINGS
     assert "advisory" in lines[0]
-    assert "- src/app.py:3 python.lang.security.audit.eval-detected" in lines
+    assert "- `src/app.py`:3 `python.lang.security.audit.eval-detected`" in lines
 
 
 @pytest.mark.parametrize("exit_code", [1, 2, 7, 13])
@@ -84,3 +84,86 @@ def test_main_exit_codes_and_step_summary(tmp_path, monkeypatch, capsys):
     text = summary.read_text(encoding="utf-8")
     assert "completed with findings (advisory)" in text
     assert "NOT COMPLETED (execution error, not a pass)" in text
+
+
+# --- Untrusted finding text must stay data (paths come from repo content) ---
+
+FORGED_COMMAND = {
+    "check_id": "python.lang.security.audit.eval-detected",
+    "path": "bait\n::error title=FORGED_REVIEW::attacker.py",
+    "start": {"line": 1},
+}
+FORGED_HEADING = {
+    "check_id": "rule\r\n\r\n## FORGED CLEAN PASS\n\nall good",
+    "path": "x\n\n## FORGED CLEAN PASS\n\n[click](https://example.invalid) `tick`",
+    "start": {"line": 2},
+}
+
+
+def _runner_commands(stdout: str) -> list[str]:
+    """Lines the Actions runner would act on, honouring ::stop-commands::."""
+    commands, stop = [], None
+    for raw in stdout.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        line = raw.strip()
+        if stop is not None:
+            if line == f"::{stop}::":
+                stop = None
+            continue
+        if line.startswith("::stop-commands::"):
+            stop = line[len("::stop-commands::"):]
+            continue
+        if line.startswith("::"):
+            commands.append(line)
+    assert stop is None, "workflow commands were never resumed"
+    return commands
+
+
+def _run_main(tmp_path, monkeypatch, capsys, results):
+    summary = tmp_path / "summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    report = tmp_path / "semgrep.json"
+    report.write_text(json.dumps(_report(results=results)), encoding="utf-8")
+    code = mod.main(["x", "0", str(report)])
+    return code, capsys.readouterr().out, summary.read_text(encoding="utf-8")
+
+
+def test_command_like_path_cannot_forge_a_workflow_command(tmp_path, monkeypatch, capsys):
+    code, out, _ = _run_main(tmp_path, monkeypatch, capsys, [FORGED_COMMAND])
+    assert code == 0
+    assert _runner_commands(out) == [
+        "::warning title=Semgrep SAST findings::Scan completed with 1 finding(s) (advisory, not blocking)."
+    ]
+    # Escaped onto the finding's own line, not dropped.
+    assert r"bait\u000a::error title=FORGED_REVIEW::attacker.py" in out
+
+
+def test_path_cannot_inject_summary_headings_or_markdown(tmp_path, monkeypatch, capsys):
+    _, _, text = _run_main(tmp_path, monkeypatch, capsys, [FORGED_HEADING])
+    headings = [line for line in text.splitlines() if line.startswith("#")]
+    assert headings == ["## Semgrep SAST: completed with findings (advisory)"]
+    finding = [line for line in text.splitlines() if line.startswith("- ")]
+    assert len(finding) == 1
+    # Each untrusted value is one code span, so links and backticks stay literal.
+    assert finding[0].startswith(r"- `` x\u000a\u000a## FORGED CLEAN PASS")
+    assert "`tick`" in finding[0]
+
+
+def test_failed_scan_output_also_resumes_commands(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(tmp_path / "summary.md"))
+    assert mod.main(["x", "2", str(tmp_path / "absent.json")]) == 1
+    assert _runner_commands(capsys.readouterr().out) == [
+        "::error title=Semgrep SAST not completed::Semgrep exited 2; the scan did not complete."
+    ]
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("src/app.py", "`src/app.py`"),
+        ("a`b", "``a`b``"),
+        ("`edge`", "`` `edge` ``"),
+        ("line\u2028sep\x85x\x7f", r"`line\u2028sep\u0085x\u007f`"),
+    ],
+)
+def test_code_span_escaping(value, expected):
+    assert mod._code(value) == expected

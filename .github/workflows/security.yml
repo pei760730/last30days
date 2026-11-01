@@ -94,12 +94,18 @@ jobs:
       # `--config=auto` is not usable here: Semgrep refuses it when metrics
       # are off ("Cannot create auto config when metrics are off") and exits 2.
       # A run that does not complete fails the job instead of passing silently.
+      # Semgrep's own output echoes repository file names, so workflow
+      # commands stay stopped while it runs (a file named `x\n::error ...`
+      # must not become an annotation).
       - name: Run Semgrep SAST scan
         env:
           SEMGREP_SEND_METRICS: off
         run: |
+          stop_token="$(python3 -c 'import secrets; print(secrets.token_hex(16))')"
+          echo "::stop-commands::${stop_token}"
           set +e
           semgrep scan --config p/default --metrics off --json-output="$RUNNER_TEMP/semgrep.json"
           scan_exit=$?
           set -e
+          echo "::${stop_token}::"
           python3 .github/scripts/semgrep_summary.py "$scan_exit" "$RUNNER_TEMP/semgrep.json"

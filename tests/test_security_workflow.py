@@ -55,6 +55,13 @@ def test_security_workflow_runs_sast_without_unused_code_scanning_permission() -
     assert "semgrep scan --config auto" not in sast_job
     assert "continue-on-error" not in sast_job
     assert 'python3 .github/scripts/semgrep_summary.py "$scan_exit"' in sast_job
+    # Semgrep echoes repository file names; commands stay stopped around the
+    # scan and resume before the classifier emits its trusted annotations.
+    run_block = sast_job.split("semgrep scan --config", 1)
+    assert 'echo "::stop-commands::${stop_token}"' in run_block[0]
+    after_scan, classifier = run_block[1].split("python3 .github/scripts/semgrep_summary.py", 1)
+    assert 'echo "::${stop_token}::"' in after_scan
+    assert "secrets.token_hex" in sast_job
     assert "contents: read" in sast_job
     assert "security-events: write" not in sast_job
     assert "--sarif" not in sast_job

@@ -6,6 +6,11 @@ A scan that did not complete (non-zero Semgrep exit, missing or unreadable
 JSON report, fatal errors, or zero scanned files) is not a pass and fails the
 job, so a configuration or tool error can never look like "no findings".
 
+Finding paths and rule ids come from repository content and the public
+registry, so they are untrusted: they are escaped onto one line and shown as
+Markdown code, and the listing is printed with workflow commands stopped.
+Only the fixed, count-based annotations below are emitted as commands.
+
 Usage:
   python3 .github/scripts/semgrep_summary.py EXIT_CODE REPORT_JSON
 """
@@ -14,12 +19,26 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import secrets
 import sys
 from pathlib import Path
 
 CLEAN = "clean"
 FINDINGS = "findings"
 FAILED = "failed"
+
+# Line breaks the Actions runner or Markdown may split on, plus other controls.
+_UNSAFE = re.compile(r"[\x00-\x1f\x7f\x85  ]")
+
+
+def _code(value: object) -> str:
+    """Render untrusted text as a single-line Markdown code span."""
+    text = _UNSAFE.sub(lambda m: f"\\u{ord(m.group()):04x}", str(value))
+    longest = max((len(run) for run in re.findall(r"`+", text)), default=0)
+    fence = "`" * (longest + 1)
+    pad = " " if text.startswith("`") or text.endswith("`") or not text.strip() else ""
+    return f"{fence}{pad}{text}{pad}{fence}"
 
 
 def classify(exit_code: int, report: dict | None) -> tuple[str, list[str]]:
@@ -48,7 +67,7 @@ def classify(exit_code: int, report: dict | None) -> tuple[str, list[str]]:
     lines.insert(0, f"Scan completed with {len(results)} finding(s) (advisory, not blocking).")
     for result in results:
         start = result.get("start") or {}
-        lines.append(f"- {result.get('path')}:{start.get('line')} {result.get('check_id')}")
+        lines.append(f"- {_code(result.get('path'))}:{start.get('line')} {_code(result.get('check_id'))}")
     return FINDINGS, lines
 
 
@@ -71,7 +90,10 @@ def main(argv: list[str]) -> int:
         FAILED: "Semgrep SAST: NOT COMPLETED (execution error, not a pass)",
     }
     summary = "\n".join([f"## {titles[status]}", "", *lines, ""])
+    token = secrets.token_hex(16)
+    print(f"::stop-commands::{token}")
     print(summary)
+    print(f"::{token}::")
     step_summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if step_summary:
         with open(step_summary, "a", encoding="utf-8") as fh:
