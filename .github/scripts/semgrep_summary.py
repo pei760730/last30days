@@ -22,22 +22,40 @@ import os
 import re
 import secrets
 import sys
+import unicodedata
 from pathlib import Path
 
 CLEAN = "clean"
 FINDINGS = "findings"
 FAILED = "failed"
 
-# Line breaks the Actions runner or Markdown may split on, plus other controls.
-_UNSAFE = re.compile(r"[\x00-\x1f\x7f\x85  ]")
+# Escaped so untrusted text stays on one visible line: controls and line
+# breaks the runner or Markdown split on (Cc, Zl, Zp), invisible format
+# characters such as bidi overrides and zero-width spaces (Cf), and lone
+# surrogates from non-UTF-8 file names that cannot be written out (Cs).
+_ESCAPED_CATEGORIES = frozenset({"Cc", "Cf", "Cs", "Zl", "Zp"})
+
+
+def _escape(text: str) -> str:
+    return "".join(
+        (f"\\u{ord(ch):04x}" if ord(ch) <= 0xFFFF else f"\\U{ord(ch):08x}")
+        if unicodedata.category(ch) in _ESCAPED_CATEGORIES
+        else ch
+        for ch in text
+    )
 
 
 def _code(value: object) -> str:
     """Render untrusted text as a single-line Markdown code span."""
-    text = _UNSAFE.sub(lambda m: f"\\u{ord(m.group()):04x}", str(value))
+    text = _escape(str(value))
+    if not text.strip(" "):
+        # CommonMark never strips an all-space span; an empty one is not a span.
+        return f"`{text or ' '}`"
     longest = max((len(run) for run in re.findall(r"`+", text)), default=0)
     fence = "`" * (longest + 1)
-    pad = " " if text.startswith("`") or text.endswith("`") or not text.strip() else ""
+    # One space is stripped from each side when both ends are spaces, and a
+    # backtick next to the fence would merge with it, so pad in either case.
+    pad = " " if text[0] in "` " or text[-1] in "` " else ""
     return f"{fence}{pad}{text}{pad}{fence}"
 
 

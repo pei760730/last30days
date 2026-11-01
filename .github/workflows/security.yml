@@ -96,16 +96,20 @@ jobs:
       # A run that does not complete fails the job instead of passing silently.
       # Semgrep's own output echoes repository file names, so workflow
       # commands stay stopped while it runs (a file named `x\n::error ...`
-      # must not become an annotation).
+      # must not become an annotation). stderr is folded into stdout because
+      # the runner reads the two streams independently, and the resume marker
+      # starts on a fresh line in case Semgrep's last line is unterminated.
+      # `python3 -I` keeps a checked-in secrets.py/json.py from shadowing the
+      # standard library before or after the stop boundary.
       - name: Run Semgrep SAST scan
         env:
           SEMGREP_SEND_METRICS: off
         run: |
-          stop_token="$(python3 -c 'import secrets; print(secrets.token_hex(16))')"
+          stop_token="$(python3 -I -c 'import secrets; print(secrets.token_hex(16))')"
           echo "::stop-commands::${stop_token}"
           set +e
-          semgrep scan --config p/default --metrics off --json-output="$RUNNER_TEMP/semgrep.json"
+          semgrep scan --config p/default --metrics off --json-output="$RUNNER_TEMP/semgrep.json" 2>&1
           scan_exit=$?
           set -e
-          echo "::${stop_token}::"
-          python3 .github/scripts/semgrep_summary.py "$scan_exit" "$RUNNER_TEMP/semgrep.json"
+          printf '\n::%s::\n' "$stop_token"
+          python3 -I .github/scripts/semgrep_summary.py "$scan_exit" "$RUNNER_TEMP/semgrep.json" 2>&1

@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -93,17 +94,33 @@ FORGED_COMMAND = {
     "path": "bait\n::error title=FORGED_REVIEW::attacker.py",
     "start": {"line": 1},
 }
+# The runner's legacy parser acts on `##[cmd]` anywhere in a line, so escaping
+# alone cannot neutralise this one; only the stopped region does.
+FORGED_LEGACY = {"check_id": "r", "path": "x##[error title=FORGED_V1]FORGED_V1", "start": {"line": 1}}
 FORGED_HEADING = {
     "check_id": "rule\r\n\r\n## FORGED CLEAN PASS\n\nall good",
     "path": "x\n\n## FORGED CLEAN PASS\n\n[click](https://example.invalid) `tick`",
     "start": {"line": 2},
 }
+FORGED_BARE_CR = {"check_id": "r", "path": "x\r\r## FORGED CLEAN PASS\r", "start": {"line": 3}}
+FORGED_LINK = {"check_id": "r", "path": "`[click](https://example.invalid) **bold**", "start": {"line": 4}}
+FORGED_ALL = [FORGED_COMMAND, FORGED_LEGACY, FORGED_HEADING, FORGED_BARE_CR, FORGED_LINK]
+
+TRUSTED_WARNING = "::warning title=Semgrep SAST findings::Scan completed with {n} finding(s) (advisory, not blocking)."
+
+
+def _runner_lines(stdout: str) -> list[str]:
+    return re.split(r"\r\n|\r|\n", stdout)
 
 
 def _runner_commands(stdout: str) -> list[str]:
-    """Lines the Actions runner would act on, honouring ::stop-commands::."""
+    """Lines the Actions runner would act on, honouring ::stop-commands::.
+
+    Mirrors ActionCommand.TryParseV2 (trimmed line starting with ``::``) and
+    the legacy TryParse fallback (``##[`` anywhere in the line).
+    """
     commands, stop = [], None
-    for raw in stdout.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+    for raw in _runner_lines(stdout):
         line = raw.strip()
         if stop is not None:
             if line == f"::{stop}::":
@@ -112,14 +129,24 @@ def _runner_commands(stdout: str) -> list[str]:
         if line.startswith("::stop-commands::"):
             stop = line[len("::stop-commands::"):]
             continue
-        if line.startswith("::"):
+        if line.startswith("::") or "##[" in raw:
             commands.append(line)
     assert stop is None, "workflow commands were never resumed"
     return commands
 
 
+def _stopped_region(stdout: str) -> tuple[str, list[str]]:
+    lines = _runner_lines(stdout)
+    starts = [i for i, line in enumerate(lines) if line.startswith("::stop-commands::")]
+    assert len(starts) == 1
+    token = lines[starts[0]][len("::stop-commands::"):]
+    end = lines.index(f"::{token}::")
+    return token, lines[starts[0] + 1 : end]
+
+
 def _run_main(tmp_path, monkeypatch, capsys, results):
     summary = tmp_path / "summary.md"
+    summary.unlink(missing_ok=True)
     monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
     report = tmp_path / "semgrep.json"
     report.write_text(json.dumps(_report(results=results)), encoding="utf-8")
@@ -127,25 +154,45 @@ def _run_main(tmp_path, monkeypatch, capsys, results):
     return code, capsys.readouterr().out, summary.read_text(encoding="utf-8")
 
 
-def test_command_like_path_cannot_forge_a_workflow_command(tmp_path, monkeypatch, capsys):
-    code, out, _ = _run_main(tmp_path, monkeypatch, capsys, [FORGED_COMMAND])
+def test_command_like_paths_cannot_forge_workflow_commands(tmp_path, monkeypatch, capsys):
+    code, out, _ = _run_main(tmp_path, monkeypatch, capsys, FORGED_ALL)
     assert code == 0
-    assert _runner_commands(out) == [
-        "::warning title=Semgrep SAST findings::Scan completed with 1 finding(s) (advisory, not blocking)."
-    ]
-    # Escaped onto the finding's own line, not dropped.
-    assert r"bait\u000a::error title=FORGED_REVIEW::attacker.py" in out
+    assert _runner_commands(out) == [TRUSTED_WARNING.format(n=len(FORGED_ALL))]
+    # Every finding is listed inside the stopped region, escaped onto one line.
+    _, region = _stopped_region(out)
+    findings = [line for line in region if line.startswith("- ")]
+    assert len(findings) == len(FORGED_ALL)
+    assert r"bait\u000a::error title=FORGED_REVIEW::attacker.py" in findings[0]
+    assert "x##[error title=FORGED_V1]FORGED_V1" in findings[1]
 
 
-def test_path_cannot_inject_summary_headings_or_markdown(tmp_path, monkeypatch, capsys):
-    _, _, text = _run_main(tmp_path, monkeypatch, capsys, [FORGED_HEADING])
+def test_stop_token_is_unpredictable(tmp_path, monkeypatch, capsys):
+    tokens = {_stopped_region(_run_main(tmp_path, monkeypatch, capsys, [FINDING])[1])[0] for _ in range(3)}
+    assert len(tokens) == 3
+    assert all(re.fullmatch(r"[0-9a-f]{32}", token) for token in tokens)
+
+
+def test_paths_cannot_inject_summary_headings_or_markdown(tmp_path, monkeypatch, capsys):
+    _, _, text = _run_main(tmp_path, monkeypatch, capsys, FORGED_ALL)
+    # No stray line breaks of any kind: Markdown sees exactly the lines we wrote.
+    assert text.splitlines() == text.split("\n")[:-1]
     headings = [line for line in text.splitlines() if line.startswith("#")]
     assert headings == ["## Semgrep SAST: completed with findings (advisory)"]
-    finding = [line for line in text.splitlines() if line.startswith("- ")]
-    assert len(finding) == 1
-    # Each untrusted value is one code span, so links and backticks stay literal.
-    assert finding[0].startswith(r"- `` x\u000a\u000a## FORGED CLEAN PASS")
-    assert "`tick`" in finding[0]
+    findings = [line for line in text.splitlines() if line.startswith("- ")]
+    assert findings[2].startswith(r"- `` x\u000a\u000a## FORGED CLEAN PASS")
+    assert "`tick`" in findings[2]
+    assert findings[3] == r"- `x\u000d\u000d## FORGED CLEAN PASS\u000d`:3 `r`"
+    assert findings[4] == "- `` `[click](https://example.invalid) **bold** ``:4 `r`"
+
+
+def test_undecodable_file_name_still_reports(tmp_path, monkeypatch, capsys):
+    # json.loads cannot produce this, but a lone surrogate is what Python-side
+    # tooling yields for a non-UTF-8 file name; it must not crash the summary.
+    surrogate = {"check_id": "r", "path": "bad\udcffname.py", "start": {"line": 1}}
+    code, out, text = _run_main(tmp_path, monkeypatch, capsys, [surrogate])
+    assert code == 0
+    assert r"`bad\udcffname.py`" in text
+    assert _runner_commands(out) == [TRUSTED_WARNING.format(n=1)]
 
 
 def test_failed_scan_output_also_resumes_commands(tmp_path, monkeypatch, capsys):
@@ -162,7 +209,15 @@ def test_failed_scan_output_also_resumes_commands(tmp_path, monkeypatch, capsys)
         ("src/app.py", "`src/app.py`"),
         ("a`b", "``a`b``"),
         ("`edge`", "`` `edge` ``"),
-        ("line\u2028sep\x85x\x7f", r"`line\u2028sep\u0085x\u007f`"),
+        ("`a", "`` `a ``"),
+        ("a`", "`` a` ``"),
+        (" a ", "`  a  `"),
+        ("", "` `"),
+        ("  ", "`  `"),
+        ("a\rb", r"`a\u000db`"),
+        ("line\u2028sep\x85x\x7f\u2029", r"`line\u2028sep\u0085x\u007f\u2029`"),
+        ("\u202egnp.exe\u200b", r"`\u202egnp.exe\u200b`"),
+        ("x\U000e0001y", r"`x\U000e0001y`"),
     ],
 )
 def test_code_span_escaping(value, expected):
